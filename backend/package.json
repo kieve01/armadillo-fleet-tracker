@@ -1,0 +1,25 @@
+{
+  "name": "armadillo-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run build && node --watch dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/server.ts --bundle --platform=node --target=node20 --outfile=dist/server.js",
+    "start": "node dist/server.js"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.27.4",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1018.0",
+    "@aws-sdk/client-dynamodb": "^3.1018.0",
+    "@aws-sdk/client-location": "^3.1018.0",
+    "@aws-sdk/lib-dynamodb": "^3.1018.0",
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  }
+}

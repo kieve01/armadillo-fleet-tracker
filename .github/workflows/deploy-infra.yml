@@ -1,0 +1,117 @@
+name: Deploy ECS Infrastructure
+
+on:
+  push:
+    branches: ["main", "dev"]
+    paths:
+      - "backend/**"
+      - "infra/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'sa-east-1' }}
+  APP_NAME: ${{ vars.APP_NAME || 'armadillo-tracker' }}
+  STAGE: ${{ github.ref_name == 'main' && 'prod' || 'qa' }}
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name == 'main' && 'prod' || 'qa' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Resolve state bucket
+        id: tfstate
+        run: |
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          if [ -n "${{ vars.TF_STATE_BUCKET }}" ]; then
+            BUCKET_NAME="${{ vars.TF_STATE_BUCKET }}"
+          else
+            BUCKET_NAME="${APP_NAME}-tfstate-${STAGE}-${AWS_REGION}-${ACCOUNT_ID}"
+          fi
+          echo "name=$BUCKET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure Terraform state bucket exists
+        run: |
+          BUCKET_NAME="${{ steps.tfstate.outputs.name }}"
+          if ! aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
+            if [ "$AWS_REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$BUCKET_NAME"
+            else
+              aws s3api create-bucket \
+                --bucket "$BUCKET_NAME" \
+                --create-bucket-configuration LocationConstraint="$AWS_REGION"
+            fi
+          fi
+          aws s3api put-bucket-versioning \
+            --bucket "$BUCKET_NAME" \
+            --versioning-configuration Status=Enabled
+
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ steps.tfstate.outputs.name }}" \
+            -backend-config="key=${APP_NAME}/${STAGE}/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true"
+
+      - name: Ensure ECR exists
+        id: ecr
+        run: |
+          REPO_NAME="${APP_NAME}-backend"
+          REPO_URI=$(aws ecr describe-repositories \
+            --region "$AWS_REGION" \
+            --repository-names "$REPO_NAME" \
+            --query "repositories[0].repositoryUri" \
+            --output text 2>/dev/null || true)
+          if [ -z "$REPO_URI" ] || [ "$REPO_URI" = "None" ]; then
+            REPO_URI=$(aws ecr create-repository \
+              --region "$AWS_REGION" \
+              --repository-name "$REPO_NAME" \
+              --image-scanning-configuration scanOnPush=true \
+              --query "repository.repositoryUri" \
+              --output text)
+          fi
+          echo "url=$REPO_URI" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ECR
+        run: |
+          REGISTRY="${{ steps.ecr.outputs.url }}"
+          REGISTRY="${REGISTRY%%/*}"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Build and push image
+        run: |
+          IMAGE_URI="${{ steps.ecr.outputs.url }}:${IMAGE_TAG}"
+          docker build -t "$IMAGE_URI" ./backend
+          docker push "$IMAGE_URI"
+
+      - name: Terraform apply
+        working-directory: infra
+        run: |
+          terraform apply -auto-approve \
+            -var="region=${AWS_REGION}" \
+            -var="app_name=${APP_NAME}" \
+            -var="stage=${STAGE}" \
+            -var="geofence_collection=${{ vars.GEOFENCE_COLLECTION }}" \
+            -var="route_calculator=${{ vars.ROUTE_CALCULATOR }}" \
+            -var="container_image=${{ steps.ecr.outputs.url }}:${IMAGE_TAG}"

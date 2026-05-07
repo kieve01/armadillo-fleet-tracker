@@ -1,0 +1,257 @@
+/* ── Logo header ──────────────────────────────────── */
+.logo-sidebar {
+  display: flex;
+  align-items: center;
+  height: 60px;
+  padding: 0 16px 0 11px;
+  overflow: hidden;
+  flex-shrink: 0;
+  gap: 14px;
+}
+
+.logo-sidebar--collapsed {
+  justify-content: center;
+  align-items: center;
+  padding: 0;
+  height: 48px;
+}
+
+/* Logo wrap: fade + clip when collapsed */
+.logo-sidebar__logo-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 0.18s ease, max-width 0.22s cubic-bezier(0.4,0,0.2,1);
+  max-width: 200px;
+}
+
+.logo-sidebar__logo-wrap--hidden {
+  opacity: 0;
+  max-width: 0;
+  pointer-events: none;
+}
+
+.logo-sidebar__img {
+  width: 148px;
+  height: auto;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+/* ── Hamburger button ─────────────────────────────── */
+.sidebar-hamburger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.13s;
+  flex-shrink: 0;
+}
+
+/* Collapsed: center hamburger like nav icons */
+.ant-layout-sider-collapsed .logo-sidebar {
+  padding: 0 !important;
+  justify-content: center;
+  width: 56px;
+  height: 48px;
+}
+
+.ant-layout-sider-collapsed .sidebar-hamburger {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  margin: 0;
+}
+.sidebar-hamburger:hover {
+  background: rgba(128,128,128,0.1) !important;
+}
+
+.ant-layout-sider-collapsed .sidebar-hamburger {
+  width: 56px;
+  height: 48px;
+  border-radius: 0;
+}
+
+/* ── Sliding panels ───────────────────────────────── */
+.sidebar-panels {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  transition: transform 220ms cubic-bezier(0.4, 0, 0.2, 1);
+  background: inherit;
+  overflow-y: auto;
+}
+
+.sidebar-panel--main                        { transform: translateX(0);    }
+.sidebar-panel--main.sidebar-panel--hidden  { transform: translateX(-100%); }
+.sidebar-panel--sub                         { transform: translateX(100%); }
+.sidebar-panel--sub.sidebar-panel--active   { transform: translateX(0);    }
+
+.sidebar-panel-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Nav ──────────────────────────────────────────── */
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 0;
+  gap: 2px;
+}
+
+.sidebar-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 16px 0 0;
+  height: 44px;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background 0.13s ease, color 0.13s ease;
+  outline: none;
+  user-select: none;
+}
+.sidebar-nav-item:hover        { background: rgba(128,128,128,0.07); }
+.sidebar-nav-item:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+
+.sidebar-nav-item__bar {
+  position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  transition: background 0.13s;
+  flex-shrink: 0;
+}
+
+.sidebar-nav-item__icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  margin-left: 12px;
+  transition: color 0.13s, background 0.13s;
+}
+
+.ant-layout-sider-collapsed .sidebar-nav-item {
+  justify-content: center;
+  padding: 0;
+  height: 48px;
+}
+.ant-layout-sider-collapsed .sidebar-nav-item__icon {
+  margin-left: 0;
+  border-radius: 8px;
+}
+
+.sidebar-nav-item__label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+.sidebar-nav-item__chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  transition: color 0.13s, transform 0.13s;
+}
+.sidebar-nav-item--active .sidebar-nav-item__chevron { transform: translateX(2px); }
+
+/* ── Subpanel header ──────────────────────────────── */
+.sidebar-subpanel__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  flex-shrink: 0;
+  min-height: 52px;
+}
+
+.sidebar-subpanel__back {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.sidebar-subpanel__back:hover { opacity: 0.7; }
+
+.sidebar-subpanel__icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+/* ── Footer ───────────────────────────────────────── */
+.sidebar-footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  height: 44px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.13s;
+  outline: none;
+  user-select: none;
+}
+.sidebar-theme-toggle:hover        { background: rgba(128,128,128,0.07); }
+.sidebar-theme-toggle:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
+.sidebar-theme-toggle--collapsed   { justify-content: center; padding: 0; }
+.sidebar-theme-toggle__icon        { font-size: 15px; display: flex; align-items: center; }
+.sidebar-theme-toggle__label       { font-size: 13px; font-weight: 500; letter-spacing: -0.01em; }
+
+/* ── Empty state ──────────────────────────────────── */
+.sidebar-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 48px 24px;
+  text-align: center;
+}
+
+/* ── Ant Design Sider overrides ───────────────────── */
+.ant-layout-sider {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+}
+.ant-layout-sider-children {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}

@@ -1,0 +1,265 @@
+.geofence-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.geofence-panel__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 12px 0;
+  flex-shrink: 0;
+}
+
+.geofence-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 0 8px;
+}
+
+.geofence-panel__loading,
+.geofence-panel__empty {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+.geofence-list-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  transition: background 0.15s;
+  cursor: default;
+}
+
+.geofence-list-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.geofence-list-item--hidden {
+  opacity: 0.5;
+}
+
+.geofence-list-item__icon {
+  font-size: 16px;
+  color: #00418b;
+  flex-shrink: 0;
+}
+
+.geofence-list-item__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* ── Vehicles panel ─────────────────────────────── */
+.vehicle-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.vehicle-panel__toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 10px 10px 6px;
+  flex-shrink: 0;
+}
+
+.vehicle-panel__list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 8px 10px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128,128,128,0.25) transparent;
+}
+.vehicle-panel__list::-webkit-scrollbar {
+  width: 4px;
+}
+.vehicle-panel__list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.vehicle-panel__list::-webkit-scrollbar-thumb {
+  background: rgba(128,128,128,0.25);
+  border-radius: 99px;
+}
+.vehicle-panel__list::-webkit-scrollbar-thumb:hover {
+  background: rgba(128,128,128,0.45);
+}
+
+.vehicle-panel__loading,
+.vehicle-panel__empty {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+.vehicle-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+  border-radius: 8px;
+}
+
+.vehicle-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.vehicle-item--selected {
+  background: rgba(0, 65, 139, 0.08);
+}
+
+.vehicle-item--hidden {
+  opacity: 0.52;
+}
+
+.vehicle-item__icon {
+  font-size: 16px;
+  color: #00418b;
+  flex-shrink: 0;
+}
+
+.vehicle-item__tracker-strip {
+  width: 4px;
+  height: 28px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.vehicle-item__info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.vehicle-panel__section {
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+}
+
+.tracker-resource-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+}
+
+.tracker-group {
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.tracker-group__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.tracker-group__left {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.tracker-group__chevron {
+  font-size: 12px;
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.tracker-group__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.tracker-group__devices {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tracker-group__empty {
+  display: block;
+  text-align: center;
+  padding: 10px 0;
+  font-size: 12px;
+}
+
+
+/* ── Sort toggle ──────────────────────────────────── */
+.vehicle-sort-toggle {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+.vehicle-sort-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: rgba(128,128,128,0.7);
+  transition: background 0.13s, color 0.13s, border-color 0.13s;
+  padding: 0;
+}
+
+.vehicle-sort-btn:hover {
+  background: rgba(128,128,128,0.1);
+  color: inherit;
+}
+
+.vehicle-sort-btn--active {
+  background: rgba(0, 65, 139, 0.1);
+  color: #00418b;
+  border-color: rgba(0, 65, 139, 0.2);
+}
+
+/* ── Status dot (replaces Ant Badge) ──────────────── */
+.vehicle-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(128,128,128,0.3);
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.vehicle-status-dot--active {
+  background: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34,197,94,0.2);
+}
+
+/* MapboxDraw toolbar hidden — we use our own React buttons */
+.mapboxgl-ctrl-group .mapbox-gl-draw_ctrl-draw-btn {
+  display: none;
+}
