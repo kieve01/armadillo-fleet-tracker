@@ -6,6 +6,7 @@ interface MapState {
   mapReady: boolean
   setMap: (map: Map) => void
   setReady: (ready: boolean) => void
+  clearMap: () => void
 }
 
 export const useMapStore = create<MapState>((set) => ({
@@ -13,4 +14,5 @@ export const useMapStore = create<MapState>((set) => ({
   mapReady: false,
   setMap: (map) => set({ map }),
   setReady: (mapReady) => set({ mapReady }),
+  clearMap: () => set({ map: null, mapReady: false }),
 }))

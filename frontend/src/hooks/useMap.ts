@@ -8,22 +8,22 @@ import { useVehiclesStore } from '../features/vehicles/vehiclesStore'
 
 const DEFAULT_CENTER: [number, number] = [-77.03, -12.06]
 const DEFAULT_ZOOM = 10
-const REGION  = import.meta.env.VITE_AWS_REGION as string
+const REGION = import.meta.env.VITE_AWS_REGION as string
 const API_KEY = import.meta.env.VITE_MAP_API_KEY as string
 
 function getT(isDark: boolean) {
   return {
-    bg:         isDark ? '#1e2435' : '#ffffff',
-    bgHover:    isDark ? '#252b3d' : '#f4f6f9',
-    bgActive:   isDark ? '#4a9fd4' : '#1a73e8',
-    text:       isDark ? '#e2e8f0' : '#3c4043',
-    textMuted:  isDark ? '#64748b' : '#b0b8c4',
+    bg: isDark ? '#1e2435' : '#ffffff',
+    bgHover: isDark ? '#252b3d' : '#f4f6f9',
+    bgActive: isDark ? '#4a9fd4' : '#1a73e8',
+    text: isDark ? '#e2e8f0' : '#3c4043',
+    textMuted: isDark ? '#64748b' : '#b0b8c4',
     textActive: '#ffffff',
-    border:     isDark ? '#2e3650' : 'rgba(0,0,0,0.10)',
-    shadow:     isDark ? '0 4px 16px rgba(0,0,0,0.55)' : '0 2px 12px rgba(0,0,0,0.18)',
-    divider:    isDark ? '#252b3d' : 'rgba(0,0,0,0.07)',
-    moonBg:     isDark ? '#2e3a5c' : '#e8f0fe',
-    moonColor:  isDark ? '#93c5fd' : '#1a73e8',
+    border: isDark ? '#2e3650' : 'rgba(0,0,0,0.10)',
+    shadow: isDark ? '0 4px 16px rgba(0,0,0,0.55)' : '0 2px 12px rgba(0,0,0,0.18)',
+    divider: isDark ? '#252b3d' : 'rgba(0,0,0,0.07)',
+    moonBg: isDark ? '#2e3a5c' : '#e8f0fe',
+    moonColor: isDark ? '#93c5fd' : '#1a73e8',
   }
 }
 
@@ -158,15 +158,15 @@ class MapTypeControl implements maplibregl.IControl {
 
       // Toggle button
       this.toggleBtn!.style.background = this.expanded ? t.bgActive : t.bg
-      this.toggleBtn!.style.color      = this.expanded ? t.textActive : t.text
-      this.toggleBtn!.style.boxShadow  = t.shadow
-      this.toggleBtn!.style.border     = `1px solid ${t.border}`
+      this.toggleBtn!.style.color = this.expanded ? t.textActive : t.text
+      this.toggleBtn!.style.boxShadow = t.shadow
+      this.toggleBtn!.style.border = `1px solid ${t.border}`
 
       // Panel shell
       this.panel!.style.background = t.bg
-      this.panel!.style.boxShadow  = t.shadow
-      this.panel!.style.border     = `1px solid ${t.border}`
-      div1.style.background        = t.divider
+      this.panel!.style.boxShadow = t.shadow
+      this.panel!.style.border = `1px solid ${t.border}`
+      div1.style.background = t.divider
 
       // Style each row
       const styleRow = (
@@ -174,17 +174,17 @@ class MapTypeControl implements maplibregl.IControl {
         active: boolean,
       ) => {
         rowEl.style.background = active ? t.bgActive : t.bg
-        rowEl.style.color      = active ? t.textActive : t.text
+        rowEl.style.color = active ? t.textActive : t.text
         // icon and label inherit color via currentColor
       }
 
-      styleRow(rowMap,     isStandard)
-      styleRow(rowHybrid,  mapStyle === 'Hybrid')
-      styleRow(rowSat,     mapStyle === 'Satellite')
+      styleRow(rowMap, isStandard)
+      styleRow(rowHybrid, mapStyle === 'Hybrid')
+      styleRow(rowSat, mapStyle === 'Satellite')
       const trafficDisabled = mapStyle === 'Satellite'
       styleRow(rowTraffic, trafficEnabled && !trafficDisabled)
       rowTraffic.style.opacity = trafficDisabled ? '0.4' : '1'
-      rowTraffic.style.cursor  = trafficDisabled ? 'not-allowed' : 'pointer'
+      rowTraffic.style.cursor = trafficDisabled ? 'not-allowed' : 'pointer'
 
       // Hover listeners (re-attach so they use fresh t)
       const hoverRows: [HTMLDivElement, () => boolean][] = [
@@ -199,11 +199,11 @@ class MapTypeControl implements maplibregl.IControl {
 
       // Dark map mini-button visibility and state
       if (isStandard) {
-        darkBtn.style.display    = 'flex'
+        darkBtn.style.display = 'flex'
         darkBtn.style.background = darkMap ? t.moonBg : 'transparent'
-        darkBtn.style.color      = darkMap ? t.moonColor : (isStandard ? t.textActive : t.textMuted)
-        darkBtn.innerHTML        = darkMap ? SVG.sun : SVG.moon
-        darkBtn.title            = darkMap ? 'Mapa claro' : 'Mapa oscuro'
+        darkBtn.style.color = darkMap ? t.moonColor : (isStandard ? t.textActive : t.textMuted)
+        darkBtn.innerHTML = darkMap ? SVG.sun : SVG.moon
+        darkBtn.title = darkMap ? 'Mapa claro' : 'Mapa oscuro'
       } else {
         darkBtn.style.display = 'none'
       }
@@ -217,22 +217,22 @@ class MapTypeControl implements maplibregl.IControl {
 
   expand() {
     this.expanded = true
-    this.panel!.style.width         = '168px'
-    this.panel!.style.opacity       = '1'
+    this.panel!.style.width = '168px'
+    this.panel!.style.opacity = '1'
     this.panel!.style.pointerEvents = 'auto'
     const t = getT(useUIStore.getState().themeMode === 'dark')
     this.toggleBtn!.style.background = t.bgActive
-    this.toggleBtn!.style.color      = t.textActive
+    this.toggleBtn!.style.color = t.textActive
   }
 
   collapse() {
     this.expanded = false
-    this.panel!.style.width         = '0'
-    this.panel!.style.opacity       = '0'
+    this.panel!.style.width = '0'
+    this.panel!.style.opacity = '0'
     this.panel!.style.pointerEvents = 'none'
     const t = getT(useUIStore.getState().themeMode === 'dark')
     this.toggleBtn!.style.background = t.bg
-    this.toggleBtn!.style.color      = t.text
+    this.toggleBtn!.style.color = t.text
   }
 
   onRemove() { this.unsub?.(); this.container?.remove() }
@@ -274,13 +274,13 @@ class FitFleetControl implements maplibregl.IControl {
         const targets = lima.length ? lima : devices
         if (!targets.length) return
         const lngs = targets.map(d => d.lng)
-        const lats  = targets.map(d => d.lat)
+        const lats = targets.map(d => d.lat)
         targets.length === 1
           ? this.map.flyTo({ center: [lngs[0], lats[0]], zoom: 14 })
           : this.map.fitBounds(
-              [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-              { padding: 80, maxZoom: 13 }
-            )
+            [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+            { padding: 80, maxZoom: 13 }
+          )
       }
     )
 
@@ -294,13 +294,13 @@ class FitFleetControl implements maplibregl.IControl {
         const devices = useVehiclesStore.getState().devices
         if (!devices.length) return
         const lngs = devices.map(d => d.lng)
-        const lats  = devices.map(d => d.lat)
+        const lats = devices.map(d => d.lat)
         devices.length === 1
           ? this.map.flyTo({ center: [lngs[0], lats[0]], zoom: 12 })
           : this.map.fitBounds(
-              [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-              { padding: 80, maxZoom: 12 }
-            )
+            [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+            { padding: 80, maxZoom: 12 }
+          )
       }
     )
 
@@ -310,7 +310,7 @@ class FitFleetControl implements maplibregl.IControl {
     const apply = () => {
       const t = getT(useUIStore.getState().themeMode === 'dark')
       this.container!.style.cssText = `background:${t.bg};box-shadow:${t.shadow};border:1px solid ${t.border};border-radius:8px;overflow:hidden;`
-      ;[btnLima, btnNacional].forEach(b => b.style.color = t.text)
+        ;[btnLima, btnNacional].forEach(b => b.style.color = t.text)
     }
     apply()
     this.unsub = useUIStore.subscribe(apply)
@@ -321,9 +321,9 @@ class FitFleetControl implements maplibregl.IControl {
 
 // ── useMap ───────────────────────────────────────────────────────────────────
 export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
-  const setMap   = useMapStore(s => s.setMap)
+  const setMap = useMapStore(s => s.setMap)
   const setReady = useMapStore(s => s.setReady)
-  const mapRef   = useRef<maplibregl.Map | null>(null)
+  const mapRef = useRef<maplibregl.Map | null>(null)
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
@@ -334,9 +334,9 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
       style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
       attributionControl: {},
     })
-    ;(map as any).__styleUrl = styleUrl
+      ; (map as any).__styleUrl = styleUrl
     map.addControl(new maplibregl.NavigationControl(), 'top-right')
-    map.addControl(new FitFleetControl(),  'top-right')
+    map.addControl(new FitFleetControl(), 'top-right')
     map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
     map.addControl(new MapTypeControl(), 'bottom-right')
     mapRef.current = map
