@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback } from 'react'
-import type { Map, GeoJSONSource, MapMouseEvent } from 'maplibre-gl'
+import type { Map as MLMap, GeoJSONSource, MapMouseEvent } from 'maplibre-gl'
 import { useMapStore } from '../../store/mapStore'
 import { useVehiclesStore } from './vehiclesStore'
 import type { Device } from './types'
@@ -98,7 +98,7 @@ function devicesToFC(
   }
 }
 
-function addSourceAndLayers(map: Map) {
+function addSourceAndLayers(map: MLMap) {
   if (!map.getSource(SOURCE_ID)) {
     map.addSource(SOURCE_ID, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
   }
@@ -143,7 +143,7 @@ function addSourceAndLayers(map: Map) {
   }
 }
 
-function loadArrowIcon(map: Map): Promise<void> {
+function loadArrowIcon(map: MLMap): Promise<void> {
   return new Promise((resolve) => {
     if (map.hasImage('vehicle-arrow')) { resolve(); return }
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
@@ -178,7 +178,7 @@ export function useVehicleLayers() {
   const animPosRef   = useRef<Map<string, AnimPos>>(new Map())
   const animStateRef = useRef<Map<string, AnimState>>(new Map())
   const kalmanRef    = useRef<Map<string, { lat: KalmanFilter; lng: KalmanFilter }>>(new Map())
-  const mapRef       = useRef<Map | null>(null)
+  const mapRef       = useRef<MLMap | null>(null)
   // Guarda el último updatedAt por device para calcular el intervalo real
   const lastUpdateAtRef = useRef<Map<string, string>>(new Map())
   // RAF global — un solo loop para todos los devices
@@ -204,7 +204,7 @@ export function useVehicleLayers() {
       const features = [...fcRef.current.features]
       let changed = false
 
-      animStateRef.current.forEach((state, key) => {
+      animStateRef.current.forEach((state: AnimState, key: string) => {
         const parts    = key.split('/')
         const deviceId = parts.slice(1).join('/')
         const tracker  = parts[0]
@@ -274,7 +274,7 @@ export function useVehicleLayers() {
         // Volvemos a la pestaña: recalibrar startTime de todas las animaciones
         // para que no haya salto por el tiempo que estuvo oculta
         const now = performance.now()
-        animStateRef.current.forEach((state, key) => {
+        animStateRef.current.forEach((state: AnimState, key: string) => {
           // Reset: la posición "desde" es la animada actual
           const cur = animPosRef.current.get(key)
           if (cur) {
