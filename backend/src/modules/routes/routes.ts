@@ -49,60 +49,42 @@ function extractSnappedWaypoints(legs: any[], fallback: [number, number][]): [nu
 export interface TrafficSpan {
   startIndex: number
   endIndex:   number
-  congestion: number   // 0=verde, 0.5=naranja, 1=rojo
+  congestion: number
   speedKmh:   number | null
 }
 
-// Extrae spans de tráfico desde los legs de la respuesta geo-routes v2.
-// Cada leg tiene Spans[], cada span tiene GeometryOffset (índice en LineString del leg),
-// Duration (duración real con tráfico) y TypicalDuration (sin tráfico).
 function extractTrafficSpans(legs: any[], geometry: [number, number][]): TrafficSpan[] {
   if (!legs?.length || !geometry.length) return []
   const spans: TrafficSpan[] = []
-  let geoOffset = 0  // offset acumulado en geometry[] global
+  let geoOffset = 0
 
   for (const leg of legs) {
     const legCoords: any[] = leg.Geometry?.LineString ?? []
     const legSpans: any[]  = leg.Spans ?? []
-    if (!legSpans.length) {
-      geoOffset += Math.max(0, legCoords.length - 1)
-      continue
-    }
 
     for (let si = 0; si < legSpans.length; si++) {
       const span     = legSpans[si]
       const nextSpan = legSpans[si + 1]
-
       const startInLeg: number = span.GeometryOffset ?? 0
       const endInLeg:   number = nextSpan?.GeometryOffset ?? (legCoords.length - 1)
-
       const globalStart = geoOffset + startInLeg
       const globalEnd   = Math.min(geoOffset + endInLeg, geometry.length - 1)
 
-      // Congestión = cuánto más lento va respecto a lo típico
       const duration        = span.Duration        ?? null
       const typicalDuration = span.TypicalDuration ?? null
       let congestion = 0
       if (duration != null && typicalDuration != null && typicalDuration > 0) {
-        // ratio: 0 = igual que típico (verde), 1 = 60% más lento (rojo)
-        const ratio = (duration - typicalDuration) / typicalDuration
-        congestion  = Math.min(1, Math.max(0, ratio / 0.6))
+        congestion = Math.min(1, Math.max(0, (duration - typicalDuration) / typicalDuration / 0.6))
       }
 
-      // Velocidad del segmento (de DynamicSpeed o SpeedLimit)
-      const speedKmh = span.DynamicSpeed?.BestCaseSpeed
-        ?? span.DynamicSpeed?.TurnDuration
-        ?? span.SpeedLimit?.MaxSpeed
-        ?? null
+      const speedKmh = span.SpeedLimit?.MaxSpeed ?? null
 
       if (globalStart < globalEnd) {
         spans.push({ startIndex: globalStart, endIndex: globalEnd, congestion, speedKmh })
       }
     }
-
     geoOffset += Math.max(0, legCoords.length - 1)
   }
-
   return spans
 }
 
@@ -127,7 +109,6 @@ async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
   const mode         = toGeoRoutesMode(input.travelMode)
   const avoidFerries = input.avoidFerries ?? true
   const avoidTolls   = input.avoidTolls   ?? false
-  // MaxAlternatives = rutas adicionales (0=solo principal, 1=+1 alt, 2=+2 alts)
   const extraAlts    = Math.min((input.maxAlternatives ?? 3) - 1, 2)
 
   const intermediary = input.waypoints.slice(1, -1).map(([lng, lat]) => ({
@@ -142,13 +123,8 @@ async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
     DepartureTime:     (input.departureTime ?? new Date()).toISOString(),
     LegGeometryFormat: 'Simple',
     ...(extraAlts > 0 ? { MaxAlternatives: extraAlts } : {}),
-    // Datos de tráfico por segmento
-    SpanAdditionalFeatures: [
-      'Duration',
-      'TypicalDuration',
-      'DynamicSpeed',
-      'SpeedLimit',
-    ] as any,
+    // Valores válidos del SDK para SpanAdditionalFeatures
+    SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit'] as any,
     ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
     ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
   }))
@@ -157,8 +133,8 @@ async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
   if (!routes.length) return []
 
   return routes.map((route: any) => {
-    const legs    = route.Legs ?? []
-    const summary = route.Summary
+    const legs     = route.Legs ?? []
+    const summary  = route.Summary
     const geometry = extractGeometry(legs)
     return {
       geometry,
@@ -189,28 +165,22 @@ export function registerRouteRoutes(app: Express): void {
     catch (err) { sendError(res, err) }
   })
 
-  // ── Calcular con alternativas y tráfico por segmento ──────────────────────
   app.post('/api/routes/calculate', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
       if (waypoints.length < 2) {
         res.status(400).json({ message: 'At least 2 waypoints are required' }); return
       }
-
       const travelMode      = parseTravelMode(req.body?.travelMode) ?? 'Car'
       const avoidTolls      = req.body?.avoidTolls === true
       const maxAlternatives = Math.min(Math.max(Number(req.body?.alternatives ?? 3), 1), 3)
 
       let results: RouteResult[]
       try {
-        results = await callGeoRoutes({
-          waypoints, travelMode, avoidTolls, avoidFerries: true,
-          departureTime: new Date(), maxAlternatives,
-        })
+        results = await callGeoRoutes({ waypoints, travelMode, avoidTolls, avoidFerries: true, departureTime: new Date(), maxAlternatives })
       } catch (awsErr) {
         if (isNoRouteError(awsErr)) {
-          res.status(422).json({ message: 'No se encontró una ruta terrestre entre los puntos seleccionados.', code: 'NO_ROUTE' })
-          return
+          res.status(422).json({ message: 'No se encontró una ruta terrestre entre los puntos seleccionados.', code: 'NO_ROUTE' }); return
         }
         throw awsErr
       }
@@ -239,7 +209,7 @@ export function registerRouteRoutes(app: Express): void {
     } catch (err) { sendError(res, err) }
   })
 
-  // ── Debug: ver respuesta raw de geo-routes ────────────────────────────────
+  // Debug endpoint
   app.post('/api/routes/debug', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
@@ -251,24 +221,22 @@ export function registerRouteRoutes(app: Express): void {
         DepartureTime:     new Date().toISOString(),
         LegGeometryFormat: 'Simple',
         MaxAlternatives:   2,
-        SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'DynamicSpeed', 'SpeedLimit'] as any,
-        
+        SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit'] as any,
       }))
-      // Devolver estructura resumida para diagnóstico
       res.json({
         routeCount: (resp.Routes ?? []).length,
         routes: (resp.Routes ?? []).map((r: any, i: number) => ({
-          index: i,
-          summary: r.Summary,
-          legCount: (r.Legs ?? []).length,
-          firstLegSpanCount: r.Legs?.[0]?.Spans?.length ?? 0,
-          firstSpanSample: r.Legs?.[0]?.Spans?.[0],
+          index:              i,
+          summary:            r.Summary,
+          legCount:           (r.Legs ?? []).length,
+          firstLegSpanCount:  r.Legs?.[0]?.Spans?.length ?? 0,
+          firstSpanSample:    r.Legs?.[0]?.Spans?.[0],
+          secondSpanSample:   r.Legs?.[0]?.Spans?.[1],
         }))
       })
     } catch (err) { sendError(res, err) }
   })
 
-  // ── Guardar ruta ──────────────────────────────────────────────────────────
   app.put('/api/routes/:routeId', async (req, res) => {
     try {
       const { routeId } = req.params
@@ -298,7 +266,6 @@ export function registerRouteRoutes(app: Express): void {
       const main = results[0]
       const now  = new Date().toISOString()
       const existing = await getRoute(routeId)
-
       const route: RouteRecord = {
         routeId, waypoints, geometry: main.geometry, travelMode,
         distance: main.distanceKm, durationSeconds: main.durationSeconds,
