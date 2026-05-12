@@ -1,11 +1,140 @@
 import type { Express } from 'express'
 import { CalculateRoutesCommand } from '@aws-sdk/client-geo-routes'
-import { geoRoutesClient } from '../../lib/locationClient'
+import { geoRoutesClient, GOOGLE_MAPS_API_KEY, USE_GOOGLE } from '../../lib/locationClient'
 import {
   deleteRoute, getRoute, listRoutes, putRoute,
   type RouteRecord, type RouteTravelMode,
 } from '../../lib/routesStore'
 import { sendError } from '../../http/sendError'
+
+// ─── Tipos compartidos ────────────────────────────────────────────────────────
+
+export interface TrafficSpan {
+  startIndex: number
+  endIndex:   number
+  congestion: number
+  speedKmh:   number | null
+}
+
+interface RouteResult {
+  geometry:         [number, number][]
+  snappedWaypoints: [number, number][]
+  distanceKm:       number | null
+  durationSeconds:  number | null
+  trafficSpans:     TrafficSpan[]
+  description?:     string
+  hasTolls?:        boolean
+}
+
+interface CalcInput {
+  waypoints:        [number, number][]
+  travelMode:       RouteTravelMode
+  avoidTolls?:      boolean
+  avoidFerries?:    boolean
+  departureTime?:   Date
+  maxAlternatives?: number
+}
+
+// ─── Google Routes API ────────────────────────────────────────────────────────
+
+const GOOGLE_ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes'
+
+function decodeGooglePolyline(encoded: string): [number, number][] {
+  const coords: [number, number][] = []
+  let index = 0, lat = 0, lng = 0
+  while (index < encoded.length) {
+    let b: number, shift = 0, result = 0
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5 } while (b >= 0x20)
+    lat += result & 1 ? ~(result >> 1) : result >> 1
+    shift = 0; result = 0
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5 } while (b >= 0x20)
+    lng += result & 1 ? ~(result >> 1) : result >> 1
+    coords.push([lng / 1e5, lat / 1e5])
+  }
+  return coords
+}
+
+async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
+  const origin      = input.waypoints[0]
+  const destination = input.waypoints[input.waypoints.length - 1]
+  const avoidTolls  = input.avoidTolls ?? false
+  const maxAlts     = Math.min((input.maxAlternatives ?? 3) - 1, 2)
+
+  const body: any = {
+    origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
+    destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
+    travelMode:  input.travelMode === 'Walking' ? 'WALK' : 'DRIVE',
+    routingPreference:        'TRAFFIC_AWARE_OPTIMAL',
+    computeAlternativeRoutes: maxAlts > 0,
+    routeModifiers:  { avoidTolls, avoidFerries: input.avoidFerries ?? false },
+    departureTime:   (input.departureTime ?? new Date()).toISOString(),
+  }
+
+  if (input.waypoints.length > 2) {
+    body.intermediates = input.waypoints.slice(1, -1).map(([lng, lat]) => ({
+      location: { latLng: { latitude: lat, longitude: lng } },
+    }))
+  }
+
+  const resp = await fetch(GOOGLE_ROUTES_URL, {
+    method:  'POST',
+    headers: {
+      'Content-Type':     'application/json',
+      'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
+      'X-Goog-FieldMask': [
+        'routes.duration',
+        'routes.distanceMeters',
+        'routes.description',
+        'routes.warnings',
+        'routes.polyline.encodedPolyline',
+        'routes.travelAdvisory.speedReadingIntervals',
+      ].join(','),
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!resp.ok) {
+    const text = await resp.text()
+    throw new Error(`Google Routes API error ${resp.status}: ${text}`)
+  }
+
+  const data: any        = await resp.json()
+  const routes: any[]    = data.routes ?? []
+  if (!routes.length) return []
+
+  return routes.map((route: any) => {
+    const durationSecs = route.duration ? parseInt(route.duration.replace('s', ''), 10) : null
+    const distanceKm   = route.distanceMeters ? route.distanceMeters / 1000 : null
+    const hasTolls     = !!(route.warnings ?? []).some(
+      (w: string) => w.toLowerCase().includes('peaje') || w.toLowerCase().includes('toll')
+    )
+
+    let geometry: [number, number][] = []
+    if (route.polyline?.encodedPolyline) {
+      geometry = decodeGooglePolyline(route.polyline.encodedPolyline)
+    }
+
+    const snappedWaypoints: [number, number][] = geometry.length >= 2
+      ? [geometry[0], geometry[geometry.length - 1]]
+      : [origin, destination]
+
+    // Traffic spans desde speedReadingIntervals
+    const trafficSpans: TrafficSpan[] = []
+    const intervals: any[] = route.travelAdvisory?.speedReadingIntervals ?? []
+    for (const interval of intervals) {
+      const startIdx = interval.startPolylinePointIndex ?? 0
+      const endIdx   = interval.endPolylinePointIndex   ?? 0
+      if (startIdx >= endIdx) continue
+      const speed      = interval.speed ?? 'NORMAL'
+      const congestion = speed === 'TRAFFIC_JAM' ? 1.0 : speed === 'SLOW' ? 0.55 : 0.1
+      trafficSpans.push({ startIndex: startIdx, endIndex: endIdx, congestion, speedKmh: null })
+    }
+
+    return { geometry, snappedWaypoints, distanceKm, durationSeconds: durationSecs, trafficSpans, description: route.description, hasTolls }
+  })
+}
+
+// ─── AWS Routes API ───────────────────────────────────────────────────────────
 
 type GeoRoutesMode = 'Car' | 'Truck' | 'Pedestrian'
 
@@ -46,66 +175,35 @@ function extractSnappedWaypoints(legs: any[], fallback: [number, number][]): [nu
   return snapped.length >= 2 ? snapped : fallback
 }
 
-export interface TrafficSpan {
-  startIndex: number
-  endIndex:   number
-  congestion: number
-  speedKmh:   number | null
-}
-
 function extractTrafficSpans(legs: any[], geometry: [number, number][]): TrafficSpan[] {
   if (!legs?.length || !geometry.length) return []
   const spans: TrafficSpan[] = []
   let geoOffset = 0
-
   for (const leg of legs) {
     const legCoords: any[] = leg.Geometry?.LineString ?? []
     const legSpans: any[]  = leg.Spans ?? []
-
     for (let si = 0; si < legSpans.length; si++) {
-      const span     = legSpans[si]
-      const nextSpan = legSpans[si + 1]
-      const startInLeg: number = span.GeometryOffset ?? 0
-      const endInLeg:   number = nextSpan?.GeometryOffset ?? (legCoords.length - 1)
+      const span        = legSpans[si]
+      const nextSpan    = legSpans[si + 1]
+      const startInLeg  = span.GeometryOffset ?? 0
+      const endInLeg    = nextSpan?.GeometryOffset ?? (legCoords.length - 1)
       const globalStart = geoOffset + startInLeg
       const globalEnd   = Math.min(geoOffset + endInLeg, geometry.length - 1)
-
       const duration        = span.Duration        ?? null
       const typicalDuration = span.TypicalDuration ?? null
       let congestion = 0
       if (duration != null && typicalDuration != null && typicalDuration > 0) {
         congestion = Math.min(1, Math.max(0, (duration - typicalDuration) / typicalDuration / 0.6))
       }
-
       const speedKmh = span.SpeedLimit?.MaxSpeed ?? null
-
-      if (globalStart < globalEnd) {
-        spans.push({ startIndex: globalStart, endIndex: globalEnd, congestion, speedKmh })
-      }
+      if (globalStart < globalEnd) spans.push({ startIndex: globalStart, endIndex: globalEnd, congestion, speedKmh })
     }
     geoOffset += Math.max(0, legCoords.length - 1)
   }
   return spans
 }
 
-interface CalcInput {
-  waypoints:        [number, number][]
-  travelMode:       RouteTravelMode
-  avoidTolls?:      boolean
-  avoidFerries?:    boolean
-  departureTime?:   Date
-  maxAlternatives?: number
-}
-
-interface RouteResult {
-  geometry:         [number, number][]
-  snappedWaypoints: [number, number][]
-  distanceKm:       number | null
-  durationSeconds:  number | null
-  trafficSpans:     TrafficSpan[]
-}
-
-async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
+async function callAWSRoutes(input: CalcInput): Promise<RouteResult[]> {
   const mode         = toGeoRoutesMode(input.travelMode)
   const avoidFerries = input.avoidFerries ?? true
   const avoidTolls   = input.avoidTolls   ?? false
@@ -123,7 +221,6 @@ async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
     DepartureTime:     (input.departureTime ?? new Date()).toISOString(),
     LegGeometryFormat: 'Simple',
     ...(extraAlts > 0 ? { MaxAlternatives: extraAlts } : {}),
-    // Valores válidos del SDK para SpanAdditionalFeatures
     SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit', 'Incidents', 'DynamicSpeed'] as any,
     Traffic: { Usage: 'UseTrafficData' } as any,
     ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
@@ -147,17 +244,22 @@ async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
   })
 }
 
+// ─── Dispatcher ──────────────────────────────────────────────────────────────
+
+async function calcRoutes(input: CalcInput): Promise<RouteResult[]> {
+  return USE_GOOGLE ? callGoogleRoutes(input) : callAWSRoutes(input)
+}
+
 function isNoRouteError(err: any): boolean {
-  const name    = String(err?.name    ?? '')
-  const message = String(err?.message ?? '')
+  const msg = String(err?.message ?? '')
   return (
-    name.includes('RouteNotFoundException') ||
-    name.includes('ValidationException')    ||
-    message.includes('No route found')             ||
-    message.includes('cannot be reached')          ||
-    message.includes('Route cannot be calculated')
+    String(err?.name ?? '').includes('RouteNotFoundException') ||
+    msg.includes('No route found') || msg.includes('cannot be reached') ||
+    msg.includes('Route cannot be calculated') || msg.includes('ZERO_RESULTS')
   )
 }
+
+// ─── Express routes ───────────────────────────────────────────────────────────
 
 export function registerRouteRoutes(app: Express): void {
 
@@ -169,26 +271,20 @@ export function registerRouteRoutes(app: Express): void {
   app.post('/api/routes/calculate', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
-      if (waypoints.length < 2) {
-        res.status(400).json({ message: 'At least 2 waypoints are required' }); return
-      }
+      if (waypoints.length < 2) { res.status(400).json({ message: 'At least 2 waypoints are required' }); return }
       const travelMode      = parseTravelMode(req.body?.travelMode) ?? 'Car'
       const avoidTolls      = req.body?.avoidTolls === true
       const maxAlternatives = Math.min(Math.max(Number(req.body?.alternatives ?? 3), 1), 3)
 
       let results: RouteResult[]
       try {
-        results = await callGeoRoutes({ waypoints, travelMode, avoidTolls, avoidFerries: true, departureTime: new Date(), maxAlternatives })
+        results = await calcRoutes({ waypoints, travelMode, avoidTolls, avoidFerries: true, departureTime: new Date(), maxAlternatives })
       } catch (awsErr) {
-        if (isNoRouteError(awsErr)) {
-          res.status(422).json({ message: 'No se encontró una ruta terrestre entre los puntos seleccionados.', code: 'NO_ROUTE' }); return
-        }
+        if (isNoRouteError(awsErr)) { res.status(422).json({ message: 'No se encontró ruta entre los puntos seleccionados.', code: 'NO_ROUTE' }); return }
         throw awsErr
       }
 
-      if (!results.length) {
-        res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return
-      }
+      if (!results.length) { res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return }
 
       const [main, ...alts] = results
       res.json({
@@ -196,45 +292,38 @@ export function registerRouteRoutes(app: Express): void {
         distance:         main.distanceKm,
         durationSeconds:  main.durationSeconds,
         trafficSpans:     main.trafficSpans,
+        description:      main.description,
         travelMode,
         departureTime:    new Date().toISOString(),
         snappedWaypoints: main.snappedWaypoints,
+        provider:         USE_GOOGLE ? 'google' : 'aws',
         alternatives: alts.map(a => ({
           geometry:         a.geometry,
           distance:         a.distanceKm,
           durationSeconds:  a.durationSeconds,
           trafficSpans:     a.trafficSpans,
+          description:      a.description,
           snappedWaypoints: a.snappedWaypoints,
         })),
       })
     } catch (err) { sendError(res, err) }
   })
 
-  // Debug endpoint
   app.post('/api/routes/debug', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
       if (waypoints.length < 2) { res.status(400).json({ message: 'Need 2 waypoints' }); return }
-      const resp = await geoRoutesClient.send(new CalculateRoutesCommand({
-        Origin:            waypoints[0],
-        Destination:       waypoints[1],
-        TravelMode:        'Car',
-        DepartureTime:     new Date().toISOString(),
-        LegGeometryFormat: 'Simple',
-        MaxAlternatives:   2,
-        SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit', 'Incidents', 'DynamicSpeed'] as any,
-        Traffic: { Usage: 'UseTrafficData' } as any,
-      }))
+      const results = await calcRoutes({ waypoints, travelMode: 'Car', maxAlternatives: 3, departureTime: new Date() })
       res.json({
-        routeCount: (resp.Routes ?? []).length,
-        routes: (resp.Routes ?? []).map((r: any, i: number) => ({
-          index:              i,
-          summary:            r.Summary,
-          legCount:           (r.Legs ?? []).length,
-          firstLegSpanCount:  r.Legs?.[0]?.Spans?.length ?? 0,
-          firstSpanSample:    r.Legs?.[0]?.Spans?.[0],
-          secondSpanSample:   r.Legs?.[0]?.Spans?.[1],
-        }))
+        provider:   USE_GOOGLE ? 'google' : 'aws',
+        routeCount: results.length,
+        routes: results.map((r, i) => ({
+          index:       i,
+          durationMin: r.durationSeconds ? Math.round(r.durationSeconds / 60) : null,
+          distanceKm:  r.distanceKm,
+          spanCount:   r.trafficSpans.length,
+          description: r.description,
+        })),
       })
     } catch (err) { sendError(res, err) }
   })
@@ -243,30 +332,22 @@ export function registerRouteRoutes(app: Express): void {
     try {
       const { routeId } = req.params
       const waypoints   = parseWaypoints(req.body?.waypoints)
-      if (waypoints.length < 2) {
-        res.status(400).json({ message: 'At least 2 waypoints are required' }); return
-      }
+      if (waypoints.length < 2) { res.status(400).json({ message: 'At least 2 waypoints are required' }); return }
       const travelMode = parseTravelMode(req.body?.travelMode)
-      if (!travelMode) {
-        res.status(400).json({ message: 'travelMode must be one of Car, Truck or Walking' }); return
-      }
+      if (!travelMode) { res.status(400).json({ message: 'travelMode must be one of Car, Truck or Walking' }); return }
 
       let results: RouteResult[]
       try {
-        results = await callGeoRoutes({ waypoints, travelMode, avoidFerries: true, departureTime: new Date(), maxAlternatives: 1 })
+        results = await calcRoutes({ waypoints, travelMode, avoidFerries: true, departureTime: new Date(), maxAlternatives: 1 })
       } catch (awsErr) {
-        if (isNoRouteError(awsErr)) {
-          res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return
-        }
+        if (isNoRouteError(awsErr)) { res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return }
         throw awsErr
       }
 
-      if (!results.length) {
-        res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return
-      }
+      if (!results.length) { res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return }
 
-      const main = results[0]
-      const now  = new Date().toISOString()
+      const main     = results[0]
+      const now      = new Date().toISOString()
       const existing = await getRoute(routeId)
       const route: RouteRecord = {
         routeId, waypoints, geometry: main.geometry, travelMode,
