@@ -215,18 +215,12 @@ export default function RouteCalculatorModal({ open, onCancel }: Props) {
       dest = r.point; setDestPoint(r.point); setDestText(r.label)
     }
 
-    // Hora de salida: hoy + hora seleccionada, o ahora si no seleccionó
-    const now   = dayjs()
-    const depTime = departureTime
-      ? now.hour(departureTime.hour()).minute(departureTime.minute()).second(0)
-      : now
 
     await runCalculate({
       origin,
       destination:   dest,
       travelMode:    'Car' as RouteTravelMode,
       avoidTolls,
-      departureTime: depTime.toISOString(),
     })
   }
 

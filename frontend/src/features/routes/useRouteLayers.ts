@@ -3,7 +3,7 @@ import type { GeoJSONSource, Map } from 'maplibre-gl'
 import { useMapStore } from '../../store/mapStore'
 import { useRoutesStore } from './routesStore'
 import type { RouteResource } from './types'
-import type { CalculateRouteResult, RouteAlternative, TrafficSpan } from './routesService'
+import type { CalculateRouteResult } from './routesService'
 
 const SOURCE_ID         = 'routes-source'
 const LINE_LAYER        = 'routes-line-layer'
