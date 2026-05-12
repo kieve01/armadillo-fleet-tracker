@@ -15,7 +15,7 @@ variable "app_name" {
 
 variable "geofence_collection" {
   type    = string
-  default = "armadillo-geofences"
+  default = "armadillo-tracker-geofence-collection"
 }
 
 variable "route_calculator" {
