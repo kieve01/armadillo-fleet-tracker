@@ -1,26 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, Checkbox, TimePicker, Typography } from 'antd'
+import { Button, Checkbox, Typography, theme } from 'antd'
 import {
   CloseOutlined, EnvironmentOutlined, AimOutlined,
-  SwapOutlined, SaveOutlined, ArrowRightOutlined,
-  LoadingOutlined, RetweetOutlined,
+  SwapOutlined, SaveOutlined, LoadingOutlined, RetweetOutlined,
 } from '@ant-design/icons'
-import dayjs from 'dayjs'
 import { useRoutesStore } from '../routesStore'
 import { useMapStore } from '../../../store/mapStore'
+import { useUIStore } from '../../../store/uiStore'
+import { resolvePlaceId } from '../routesService'
 import type { RouteTravelMode } from '../types'
+import type { TrafficSpan } from '../routesService'
 
 const BASE = import.meta.env.VITE_API_BASE_URL as string
 
-interface PlaceSuggestion { text: string; placeId: string }
+const SIDEBAR_EXPANDED  = 280
+const SIDEBAR_COLLAPSED = 56
+
+interface PlaceSuggestion { text: string; placeId: string; position?: [number, number] }
 interface ResolvedPlace   { label: string; lng: number; lat: number; point: [number, number] }
 
 async function fetchSuggestions(q: string): Promise<PlaceSuggestion[]> {
-  if (q.length < 3) return []
+  if (q.length < 2) return []
   try {
     const r = await fetch(`${BASE}/api/places/suggest?q=${encodeURIComponent(q)}`)
     if (!r.ok) return []
-    return (await r.json()) as PlaceSuggestion[]
+    return await r.json()
   } catch { return [] }
 }
 
@@ -28,168 +32,214 @@ async function resolveText(q: string): Promise<ResolvedPlace | null> {
   try {
     const r = await fetch(`${BASE}/api/places/resolve?q=${encodeURIComponent(q)}`)
     if (!r.ok) return null
-    return (await r.json()) as ResolvedPlace
+    return await r.json()
   } catch { return null }
 }
+
+const fmtDist = (d: number | null) => {
+  if (d == null) return '—'
+  if (d < 1) return `${Math.round(d * 1000)} m`
+  return `${d % 1 === 0 ? d : d.toFixed(1)} km`
+}
+
+const fmtDur = (s: number | null) => {
+  if (s == null) return '—'
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m} min`
+  const h = Math.floor(m / 60), rm = m % 60
+  return rm ? `${h} h ${rm} min` : `${h} h`
+}
+
+const arrivalStr = (durationSeconds: number | null) => {
+  if (durationSeconds == null) return null
+  return new Date(Date.now() + durationSeconds * 1000)
+    .toLocaleTimeString('es-PE', { hour: '2-digit', minute: '2-digit', hour12: false })
+}
+
+const hasTrafficDelay = (spans?: TrafficSpan[]) =>
+  !!spans?.some(s => s.congestion > 0.3)
 
 // ─── PlaceField ───────────────────────────────────────────────────────────────
 function PlaceField({
   dotColor, placeholder, value, onChange, onSelect,
   pickActive, onPickStart, onPickCancel, disabled, resolved,
 }: {
-  dotColor:     string
-  placeholder:  string
-  value:        string
-  onChange:     (v: string) => void
-  onSelect:     (p: ResolvedPlace) => void
-  pickActive:   boolean
-  onPickStart:  () => void
-  onPickCancel: () => void
-  disabled?:    boolean
-  resolved:     boolean
+  dotColor: string; placeholder: string; value: string
+  onChange: (v: string) => void; onSelect: (p: ResolvedPlace) => void
+  pickActive: boolean; onPickStart: () => void; onPickCancel: () => void
+  disabled?: boolean; resolved: boolean
 }) {
+  const { token } = theme.useToken()
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([])
   const [open,        setOpen]        = useState(false)
   const [loading,     setLoading]     = useState(false)
   const debounceRef = useRef<number | null>(null)
   const wrapRef     = useRef<HTMLDivElement>(null)
-  const inputRef    = useRef<HTMLInputElement>(null)
 
   const handleChange = (v: string) => {
-    onChange(v)
-    setSuggestions([])
+    onChange(v); setSuggestions([])
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (v.length < 3) { setOpen(false); return }
+    if (v.length < 2) { setOpen(false); return }
     setLoading(true)
     debounceRef.current = window.setTimeout(async () => {
       const res = await fetchSuggestions(v)
-      setSuggestions(res)
-      setOpen(res.length > 0)
-      setLoading(false)
-    }, 400)
+      setSuggestions(res); setOpen(res.length > 0); setLoading(false)
+    }, 350)
   }
 
   const handleSelect = async (item: PlaceSuggestion) => {
-    onChange(item.text)
-    setOpen(false)
-    setSuggestions([])
-    const resolved = await resolveText(item.text)
-    if (resolved) onSelect(resolved)
+    onChange(item.text); setOpen(false); setSuggestions([])
+    // Si la sugerencia ya trae coordenadas (desde SearchText), usarlas directamente
+    if (item.position) {
+      const [lng, lat] = item.position
+      onSelect({ label: item.text, lng, lat, point: item.position })
+      return
+    }
+    // Fallback: resolver por placeId o texto
+    let resolved: ResolvedPlace | null = null
+    if (item.placeId) {
+      const r = await resolvePlaceId(item.placeId)
+      if (r) resolved = { label: r.label, lng: r.point[0], lat: r.point[1], point: r.point }
+    }
+    if (!resolved) resolved = await resolveText(item.text)
+    if (resolved) { onChange(resolved.label); onSelect(resolved) }
   }
 
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const h = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
   }, [])
 
-  const borderColor = pickActive
-    ? 'var(--color-border-info)'
-    : resolved
-    ? '#22c55e'
-    : 'var(--color-border-secondary)'
+  const borderColor = pickActive ? token.colorPrimary
+    : resolved ? '#34a853' : token.colorBorder
 
   return (
     <div ref={wrapRef} style={{ position: 'relative', flex: 1 }}>
       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-        {/* Dot indicador */}
         <div style={{
-          width: 10, height: 10, borderRadius: '50%', flexShrink: 0,
-          background: resolved ? dotColor : 'var(--color-border-secondary)',
-          border: `2px solid ${resolved ? dotColor : 'var(--color-border-secondary)'}`,
+          width: 9, height: 9, borderRadius: '50%', flexShrink: 0,
+          background: resolved ? dotColor : token.colorBorderSecondary,
+          boxShadow: resolved ? `0 0 0 3px ${dotColor}30` : 'none',
           transition: 'all 0.2s',
-          boxShadow: resolved ? `0 0 0 3px ${dotColor}22` : 'none',
         }} />
-
         <div style={{ flex: 1, position: 'relative' }}>
           <input
-            ref={inputRef}
-            value={value}
-            onChange={e => handleChange(e.target.value)}
+            value={value} onChange={e => handleChange(e.target.value)}
             onFocus={() => suggestions.length > 0 && setOpen(true)}
-            placeholder={placeholder}
-            disabled={disabled}
+            placeholder={placeholder} disabled={disabled}
             style={{
-              width: '100%', padding: '8px 32px 8px 10px',
-              border: `1.5px solid ${borderColor}`,
-              borderRadius: 8, fontSize: 13,
-              background: 'var(--color-background-primary)',
-              color: 'var(--color-text-primary)',
-              outline: 'none', boxSizing: 'border-box',
-              transition: 'border-color 0.15s',
+              width: '100%', padding: '8px 34px 8px 10px',
+              border: `1.5px solid ${borderColor}`, borderRadius: token.borderRadius,
+              fontSize: 13, background: token.colorBgContainer,
+              color: token.colorText, outline: 'none',
+              boxSizing: 'border-box', transition: 'border-color 0.15s',
             }}
           />
-          {/* Icono derecho: loading o pick */}
-          <button
-            onClick={pickActive ? onPickCancel : onPickStart}
-            disabled={disabled}
-            title={pickActive ? 'Cancelar selección en mapa' : 'Seleccionar en mapa'}
+          <button onClick={pickActive ? onPickCancel : onPickStart} disabled={disabled}
+            title={pickActive ? 'Cancelar' : 'Seleccionar en mapa'}
             style={{
-              position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
-              width: 26, height: 26, border: 'none', borderRadius: 6,
-              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              background: pickActive ? 'var(--color-background-info)' : 'transparent',
-              color: pickActive ? 'var(--color-text-info)' : 'var(--color-text-tertiary)',
-              transition: 'all 0.15s',
-            }}
-          >
+              position: 'absolute', right: 5, top: '50%', transform: 'translateY(-50%)',
+              width: 26, height: 26, border: 'none', borderRadius: 6, cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: pickActive ? `${token.colorPrimary}18` : 'transparent',
+              color: pickActive ? token.colorPrimary : token.colorTextTertiary,
+            }}>
             {loading
               ? <LoadingOutlined style={{ fontSize: 12 }} />
-              : <AimOutlined style={{ fontSize: 12 }} />
-            }
+              : <AimOutlined    style={{ fontSize: 12 }} />}
           </button>
         </div>
       </div>
 
-      {/* Dropdown */}
+      {/* Dropdown de sugerencias */}
       {open && suggestions.length > 0 && (
         <div style={{
-          position: 'absolute', top: 'calc(100% + 4px)', left: 16, right: 0,
-          background: 'var(--color-background-primary)',
-          border: '1px solid var(--color-border-secondary)',
-          borderRadius: 8, zIndex: 1000,
-          boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+          position: 'absolute', top: 'calc(100% + 4px)', left: 15, right: 0,
+          background: token.colorBgElevated,
+          border: `1px solid ${token.colorBorderSecondary}`,
+          borderRadius: token.borderRadius,
+          zIndex: 1200,
+          boxShadow: token.boxShadowSecondary,
           overflow: 'hidden',
         }}>
           {suggestions.map((s, i) => (
-            <div
-              key={i}
-              onMouseDown={() => handleSelect(s)}
+            <div key={i} onMouseDown={() => handleSelect(s)}
               style={{
-                padding: '9px 12px', fontSize: 12.5, cursor: 'pointer',
-                borderBottom: i < suggestions.length - 1 ? '1px solid var(--color-border-tertiary)' : 'none',
+                padding: '9px 12px', fontSize: 13, cursor: 'pointer',
+                borderBottom: i < suggestions.length - 1
+                  ? `1px solid ${token.colorBorderSecondary}` : 'none',
                 display: 'flex', alignItems: 'flex-start', gap: 8,
-                color: 'var(--color-text-primary)',
-                transition: 'background 0.1s',
+                color: token.colorText, transition: 'background 0.1s',
+                // texto completo — sin truncar en el dropdown
+                whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.4,
               }}
-              onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-background-secondary)')}
+              onMouseEnter={e => (e.currentTarget.style.background = token.colorBgTextHover)}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
-              <EnvironmentOutlined style={{ fontSize: 11, color: 'var(--color-text-tertiary)', flexShrink: 0, marginTop: 2 }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.4 }}>
-                {s.text}
-              </span>
+              <EnvironmentOutlined style={{ fontSize: 12, color: '#ea4335', flexShrink: 0, marginTop: 2 }} />
+              <span>{s.text}</span>
             </div>
           ))}
         </div>
       )}
 
-      {/* Banner de selección en mapa */}
       {pickActive && (
         <div style={{
-          marginTop: 6, padding: '5px 10px', borderRadius: 6,
-          background: 'var(--color-background-info)',
-          border: '1px solid var(--color-border-info)',
-          fontSize: 11.5, color: 'var(--color-text-info)',
+          marginTop: 5, padding: '5px 10px', borderRadius: 6,
+          background: `${token.colorPrimary}14`,
+          border: `1px solid ${token.colorPrimary}`,
+          fontSize: 11.5, color: token.colorPrimary,
           display: 'flex', alignItems: 'center', gap: 5,
         }}>
-          <AimOutlined style={{ fontSize: 11 }} />
-          Haz clic en el mapa para seleccionar este punto
+          <AimOutlined style={{ fontSize: 10 }} /> Haz clic en el mapa para seleccionar este punto
         </div>
       )}
     </div>
+  )
+}
+
+// ─── Tarjeta de alternativa ───────────────────────────────────────────────────
+function AltCard({
+  index, distance, durationSeconds, trafficSpans, selected, onSelect,
+}: {
+  index: number; distance: number | null; durationSeconds: number | null
+  trafficSpans?: TrafficSpan[]; selected: boolean; onSelect: () => void
+}) {
+  const { token } = theme.useToken()
+  const label  = index === 0 ? 'Más rápida' : `Alt. ${index}`
+  const colors = [token.colorPrimary, token.colorTextSecondary, token.colorTextTertiary]
+  const color  = colors[index] ?? colors[colors.length - 1]
+  const hasDelay = hasTrafficDelay(trafficSpans)
+
+  return (
+    <button onClick={onSelect} style={{
+      flex: 1, minWidth: 0, padding: '8px 8px 7px', borderRadius: token.borderRadius,
+      cursor: 'pointer', textAlign: 'left', outline: 'none',
+      border: selected ? `2px solid ${color}` : `1.5px solid ${token.colorBorderSecondary}`,
+      background: selected ? `${color}14` : token.colorBgLayout,
+      transition: 'all 0.12s',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginBottom: 5 }}>
+        <div style={{ width: 7, height: 7, borderRadius: '50%', background: color, flexShrink: 0 }} />
+        <span style={{
+          fontSize: 9.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase',
+          color: selected ? color : token.colorTextTertiary,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+        }}>{label}</span>
+        {hasDelay && (
+          <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#f44336', flexShrink: 0 }} />
+        )}
+      </div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: token.colorText, lineHeight: 1 }}>
+        {fmtDur(durationSeconds)}
+      </div>
+      <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 3 }}>
+        {fmtDist(distance)}
+      </div>
+    </button>
   )
 }
 
@@ -197,20 +247,23 @@ function PlaceField({
 interface Props { open: boolean; onClose: () => void }
 
 export default function RouteCalculatorPanel({ open, onClose }: Props) {
+  const { token } = theme.useToken()
   const map              = useMapStore(s => s.map)
+  const sidebarCollapsed = useUIStore(s => s.sidebarCollapsed)
   const loading          = useRoutesStore(s => s.loading)
   const error            = useRoutesStore(s => s.error)
   const previewRoute     = useRoutesStore(s => s.previewRoute)
   const runCalculate     = useRoutesStore(s => s.runCalculate)
   const savePreviewRoute = useRoutesStore(s => s.savePreviewRoute)
   const clearPreview     = useRoutesStore(s => s.clearPreview)
+  const selectedAltIndex = useRoutesStore(s => s.selectedAltIndex)
+  const selectAltIndex   = useRoutesStore(s => s.selectAltIndex)
 
   const [originText,  setOriginText]  = useState('')
   const [destText,    setDestText]    = useState('')
   const [originPoint, setOriginPoint] = useState<[number, number] | null>(null)
   const [destPoint,   setDestPoint]   = useState<[number, number] | null>(null)
   const [avoidTolls,  setAvoidTolls]  = useState(false)
-  const [depTime,     setDepTime]     = useState<dayjs.Dayjs | null>(null)
   const [pickMode,    setPickMode]    = useState<'origin' | 'destination' | null>(null)
   const [localError,  setLocalError]  = useState<string | null>(null)
   const [saveId,      setSaveId]      = useState('')
@@ -220,7 +273,8 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
   const pickModeRef = useRef<typeof pickMode>(null)
   useEffect(() => { pickModeRef.current = pickMode }, [pickMode])
 
-  // Click en mapa
+  const leftOffset = (sidebarCollapsed ? SIDEBAR_COLLAPSED : SIDEBAR_EXPANDED) + 12
+
   useEffect(() => {
     if (!map || !open) return
     const onClick = async (e: any) => {
@@ -232,14 +286,12 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
       const point: [number, number] = [lng, lat]
       if (mode === 'origin') { setOriginText(label); setOriginPoint(point) }
       else                   { setDestText(label);   setDestPoint(point) }
-      setPickMode(null)
-      clearPreview()
+      setPickMode(null); clearPreview()
     }
     map.on('click', onClick)
     return () => { map.off('click', onClick) }
   }, [map, open, clearPreview])
 
-  // Cursor
   useEffect(() => {
     if (!map) return
     map.getCanvas().style.cursor = pickMode ? 'crosshair' : ''
@@ -249,24 +301,21 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
   const reset = useCallback(() => {
     setOriginText(''); setOriginPoint(null)
     setDestText('');   setDestPoint(null)
-    setAvoidTolls(false); setDepTime(null)
-    setLocalError(null); setPickMode(null)
-    setSaveId(''); setSaveStep(false)
-    clearPreview()
+    setAvoidTolls(false); setLocalError(null); setPickMode(null)
+    setSaveId(''); setSaveStep(false); clearPreview()
   }, [clearPreview])
 
   const handleClose = useCallback(() => { reset(); onClose() }, [reset, onClose])
 
   const handleSwap = () => {
-    const tmpText  = originText;  setOriginText(destText);   setDestText(tmpText)
-    const tmpPoint = originPoint; setOriginPoint(destPoint); setDestPoint(tmpPoint)
+    const t = originText; setOriginText(destText); setDestText(t)
+    const p = originPoint; setOriginPoint(destPoint); setDestPoint(p)
     clearPreview()
   }
 
   const handleCalculate = async () => {
     setLocalError(null)
-    let origin = originPoint
-    let dest   = destPoint
+    let origin = originPoint, dest = destPoint
     if (!origin && !originText.trim()) { setLocalError('Ingresa el origen'); return }
     if (!dest   && !destText.trim())   { setLocalError('Ingresa el destino'); return }
     if (!origin) {
@@ -279,271 +328,181 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
       if (!r) { setLocalError('No se encontró el destino'); return }
       dest = r.point; setDestPoint(r.point); setDestText(r.label)
     }
-    const now  = dayjs()
-    const dept = depTime ? now.hour(depTime.hour()).minute(depTime.minute()).second(0) : now
-    await runCalculate({ origin, destination: dest, travelMode: 'Car' as RouteTravelMode, avoidTolls, departureTime: dept.toISOString() })
+    await runCalculate({ origin, destination: dest, travelMode: 'Car' as RouteTravelMode, avoidTolls })
   }
 
   const handleSave = async () => {
     if (!saveId.trim()) return
-    setSaving(true)
-    await savePreviewRoute(saveId.trim())
-    setSaving(false)
-    handleClose()
-  }
-
-  const formatDist = (d: number | null) =>
-    d == null ? '—' : d >= 1000 ? `${(d / 1000).toFixed(1)} km` : `${Math.round(d)} m`
-
-  const formatDur = (s: number | null) => {
-    if (s == null) return '—'
-    const m = Math.round(s / 60)
-    if (m < 60) return `${m} min`
-    const h = Math.floor(m / 60), rm = m % 60
-    return rm ? `${h} h ${rm} min` : `${h} h`
-  }
-
-  const arrivalTime = (s: number | null) => {
-    if (s == null) return null
-    const base = depTime ? dayjs().hour(depTime.hour()).minute(depTime.minute()) : dayjs()
-    return base.add(s, 'second').format('HH:mm')
+    setSaving(true); await savePreviewRoute(saveId.trim()); setSaving(false); handleClose()
   }
 
   const displayError = localError ?? error
   const collapsed    = !!pickMode
   const canCalculate = !!(originText.trim() && destText.trim())
+  const allAlts      = previewRoute ? [previewRoute, ...(previewRoute.alternatives ?? [])] : []
+  const activeAlt    = allAlts[selectedAltIndex] ?? null
 
   if (!open) return null
 
   return (
     <>
-      {/* Panel principal */}
+      {/* Panel principal — sólido, respeta dark/light mode */}
       <div style={{
-        position: 'absolute', top: 16, right: 16,
-        width: 348,
-        background: 'var(--color-background-primary)',
-        border: '0.5px solid var(--color-border-secondary)',
-        borderRadius: 14,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.14)',
+        position: 'absolute',
+        top: 12,
+        left: leftOffset,
+        width: 306,
+        // Token correcto de Ant Design — sólido en ambos modos
+        background: token.colorBgContainer,
+        border: `1px solid ${token.colorBorderSecondary}`,
+        borderRadius: token.borderRadiusLG,
+        boxShadow: token.boxShadow,
         zIndex: 400,
         overflow: 'hidden',
-        transition: 'opacity 0.2s ease, transform 0.2s ease',
-        opacity: collapsed ? 0.08 : 1,
-        transform: collapsed ? 'scale(0.98)' : 'scale(1)',
-        pointerEvents: collapsed ? 'none' : 'auto',
+        // Sin transparencia: se oculta completamente al seleccionar en mapa
+        visibility: collapsed ? 'hidden' : 'visible',
+        transition: 'left 0.22s cubic-bezier(0.4,0,0.2,1)',
       }}>
 
         {/* Header */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10,
-          padding: '13px 16px 12px',
-          borderBottom: '0.5px solid var(--color-border-tertiary)',
-          background: 'var(--color-background-secondary)',
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: '11px 12px 10px',
+          borderBottom: `1px solid ${token.colorBorderSecondary}`,
+          background: token.colorBgLayout,
         }}>
-          <div style={{
-            width: 28, height: 28, borderRadius: 8,
-            background: 'var(--color-background-info)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <SwapOutlined style={{ color: 'var(--color-text-info)', fontSize: 13 }} />
-          </div>
-          <Typography.Text strong style={{ flex: 1, fontSize: 14 }}>
-            Calcular ruta
-          </Typography.Text>
+          <SwapOutlined style={{ color: token.colorPrimary, fontSize: 14 }} />
+          <Typography.Text strong style={{ flex: 1, fontSize: 13 }}>Calcular ruta</Typography.Text>
           {previewRoute && (
-            <button
-              onClick={reset}
-              title="Limpiar"
-              style={{
-                background: 'transparent', border: 'none', cursor: 'pointer',
-                color: 'var(--color-text-tertiary)', padding: '4px 8px',
-                borderRadius: 6, fontSize: 11,
-                display: 'flex', alignItems: 'center', gap: 4,
-              }}
-            >
-              <RetweetOutlined style={{ fontSize: 11 }} /> Limpiar
+            <button onClick={reset} style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: token.colorTextTertiary, padding: '3px 6px', borderRadius: 6, fontSize: 11,
+              display: 'flex', alignItems: 'center', gap: 3,
+            }}>
+              <RetweetOutlined style={{ fontSize: 10 }} /> Limpiar
             </button>
           )}
-          <button
-            onClick={handleClose}
-            style={{
-              background: 'transparent', border: 'none', cursor: 'pointer',
-              color: 'var(--color-text-tertiary)', padding: 4, borderRadius: 6,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-          >
-            <CloseOutlined style={{ fontSize: 12 }} />
+          <button onClick={handleClose} style={{
+            background: 'transparent', border: 'none', cursor: 'pointer',
+            color: token.colorTextTertiary, padding: 3, borderRadius: 6,
+            display: 'flex', alignItems: 'center',
+          }}>
+            <CloseOutlined style={{ fontSize: 11 }} />
           </button>
         </div>
 
-        <div style={{ padding: '14px 16px' }}>
+        <div style={{ padding: '12px 12px 14px' }}>
 
-          {/* Error */}
           {displayError && (
             <div style={{
-              padding: '8px 12px', marginBottom: 12, borderRadius: 8,
-              background: 'var(--color-background-danger)',
-              border: '1px solid var(--color-border-danger)',
-              fontSize: 12, color: 'var(--color-text-danger)', lineHeight: 1.5,
-            }}>
-              {displayError}
-            </div>
+              padding: '7px 10px', marginBottom: 10, borderRadius: token.borderRadius,
+              background: `${token.colorError}14`, border: `1px solid ${token.colorError}40`,
+              fontSize: 12, color: token.colorError, lineHeight: 1.5,
+            }}>{displayError}</div>
           )}
 
-          {/* Campos de origen y destino con swap */}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 12 }}>
-            {/* Línea conectora + campos */}
+          {/* Origen / Destino */}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'stretch', marginBottom: 10 }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {/* Origen */}
-              <PlaceField
-                dotColor="#00418b"
-                placeholder="Origen"
-                value={originText}
+              <PlaceField dotColor={token.colorPrimary} placeholder="Origen" value={originText}
                 onChange={v => { setOriginText(v); setOriginPoint(null); clearPreview() }}
                 onSelect={r => { setOriginPoint(r.point); setOriginText(r.label) }}
-                pickActive={pickMode === 'origin'}
-                onPickStart={() => setPickMode('origin')}
-                onPickCancel={() => setPickMode(null)}
-                resolved={!!originPoint}
-              />
-
-              {/* Separador visual */}
-              <div style={{
-                height: 1, background: 'var(--color-border-tertiary)',
-                marginLeft: 16,
-              }} />
-
-              {/* Destino */}
-              <PlaceField
-                dotColor="#f97316"
-                placeholder="Destino"
-                value={destText}
+                pickActive={pickMode === 'origin'} onPickStart={() => setPickMode('origin')}
+                onPickCancel={() => setPickMode(null)} resolved={!!originPoint} />
+              <div style={{ height: 1, background: token.colorBorderSecondary, marginLeft: 15 }} />
+              <PlaceField dotColor="#ea4335" placeholder="Destino" value={destText}
                 onChange={v => { setDestText(v); setDestPoint(null); clearPreview() }}
                 onSelect={r => { setDestPoint(r.point); setDestText(r.label) }}
-                pickActive={pickMode === 'destination'}
-                onPickStart={() => setPickMode('destination')}
-                onPickCancel={() => setPickMode(null)}
-                resolved={!!destPoint}
-              />
+                pickActive={pickMode === 'destination'} onPickStart={() => setPickMode('destination')}
+                onPickCancel={() => setPickMode(null)} resolved={!!destPoint} />
             </div>
-
-            {/* Botón swap vertical */}
             <div style={{ display: 'flex', alignItems: 'center' }}>
-              <button
-                onClick={handleSwap}
-                disabled={!originText && !destText}
-                title="Intercambiar origen y destino"
+              <button onClick={handleSwap} disabled={!originText && !destText}
                 style={{
-                  width: 30, height: 30, border: '1px solid var(--color-border-secondary)',
-                  borderRadius: 8, cursor: 'pointer',
+                  width: 28, height: 28, border: `1px solid ${token.colorBorderSecondary}`,
+                  borderRadius: token.borderRadius, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  background: 'var(--color-background-primary)',
-                  color: 'var(--color-text-secondary)',
+                  background: token.colorBgContainer, color: token.colorTextSecondary,
                   opacity: (!originText && !destText) ? 0.4 : 1,
-                  transition: 'all 0.15s',
-                }}
-              >
-                <SwapOutlined style={{ fontSize: 12, transform: 'rotate(90deg)' }} />
+                }}>
+                <SwapOutlined style={{ fontSize: 11, transform: 'rotate(90deg)' }} />
               </button>
             </div>
           </div>
 
-          {/* Opciones en una fila compacta */}
-          <div style={{
-            display: 'flex', gap: 10, alignItems: 'center',
-            padding: '8px 10px', borderRadius: 8, marginBottom: 12,
-            background: 'var(--color-background-secondary)',
-            border: '0.5px solid var(--color-border-tertiary)',
-          }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--color-text-tertiary)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Salida
-              </div>
-              <TimePicker
-                format="HH:mm" minuteStep={30} placeholder="Ahora"
-                value={depTime} onChange={v => { setDepTime(v); clearPreview() }}
-                style={{ width: '100%', height: 28 }}
-                use12Hours={false} showNow={false}
-                size="small"
-              />
-            </div>
-            <div style={{ width: 1, height: 32, background: 'var(--color-border-tertiary)' }} />
-            <Checkbox
-              checked={avoidTolls}
-              onChange={e => { setAvoidTolls(e.target.checked); clearPreview() }}
-              style={{ fontSize: 12, whiteSpace: 'nowrap' }}
-            >
-              Sin peajes
-            </Checkbox>
+          {/* Sin peajes */}
+          <div style={{ marginBottom: 10 }}>
+            <Checkbox checked={avoidTolls} onChange={e => { setAvoidTolls(e.target.checked); clearPreview() }}
+              style={{ fontSize: 12 }}>Evitar peajes</Checkbox>
           </div>
 
-          {/* Resultado */}
-          {previewRoute && !saveStep && (
-            <div style={{
-              marginBottom: 12, borderRadius: 10,
-              background: 'linear-gradient(135deg, var(--color-background-info) 0%, var(--color-background-secondary) 100%)',
-              border: '1px solid var(--color-border-info)',
-              overflow: 'hidden',
-            }}>
-              {/* Métricas principales */}
-              <div style={{ padding: '12px 14px 10px', display: 'flex', alignItems: 'flex-end', gap: 10 }}>
-                <div>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1 }}>
-                    {formatDist(previewRoute.distance)}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>distancia</div>
-                </div>
-                <div style={{ width: 1, height: 32, background: 'var(--color-border-info)', opacity: 0.4 }} />
-                <div>
-                  <div style={{ fontSize: 24, fontWeight: 700, color: 'var(--color-text-primary)', lineHeight: 1 }}>
-                    {formatDur(previewRoute.durationSeconds)}
-                  </div>
-                  <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 2 }}>duración</div>
-                </div>
+          {/* Alternativas */}
+          {previewRoute && !saveStep && allAlts.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+                {allAlts.map((alt, i) => (
+                  <AltCard key={i} index={i}
+                    distance={alt.distance} durationSeconds={alt.durationSeconds}
+                    trafficSpans={(alt as any).trafficSpans}
+                    selected={selectedAltIndex === i} onSelect={() => selectAltIndex(i)} />
+                ))}
               </div>
-              {/* Horario */}
-              <div style={{
-                padding: '8px 14px', borderTop: '1px solid var(--color-border-info)',
-                display: 'flex', alignItems: 'center', gap: 6,
-                fontSize: 12, color: 'var(--color-text-secondary)',
-                background: 'rgba(0,0,0,0.03)',
-              }}>
-                <span style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>
-                  {dayjs(previewRoute.departureTime).format('HH:mm')}
-                </span>
-                <ArrowRightOutlined style={{ fontSize: 9, opacity: 0.6 }} />
-                <span style={{ fontWeight: 600, color: 'var(--color-text-info)' }}>
-                  {arrivalTime(previewRoute.durationSeconds)}
-                </span>
-                <span style={{ marginLeft: 2, fontSize: 11, opacity: 0.6 }}>llegada estimada</span>
-              </div>
+
+              {activeAlt && (
+                <div style={{
+                  borderRadius: token.borderRadius, padding: '10px 12px',
+                  background: token.colorBgLayout,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: 26, fontWeight: 700, color: token.colorText, lineHeight: 1 }}>
+                        {fmtDur(activeAlt.durationSeconds)}
+                      </div>
+                      <div style={{ fontSize: 12, color: token.colorTextSecondary, marginTop: 2 }}>
+                        {fmtDist(activeAlt.distance)}
+                      </div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+                      <div style={{ fontSize: 11, color: token.colorTextTertiary, marginBottom: 2 }}>Llegada</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, color: token.colorPrimary }}>
+                        {arrivalStr(activeAlt.durationSeconds)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {hasTrafficDelay((activeAlt as any).trafficSpans) && (
+                    <div style={{
+                      marginTop: 8, padding: '5px 8px', borderRadius: 6,
+                      background: '#fff3e0', border: '1px solid #ffcc02',
+                      fontSize: 11, color: '#e65100',
+                      display: 'flex', alignItems: 'center', gap: 5,
+                    }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f44336', flexShrink: 0 }} />
+                      Hay tráfico en esta ruta
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
           {/* Paso guardar */}
           {saveStep && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--color-text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 11, fontWeight: 600, color: token.colorTextSecondary, marginBottom: 5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                 Nombre de la ruta
               </div>
-              <input
-                value={saveId}
-                onChange={e => setSaveId(e.target.value)}
+              <input value={saveId} onChange={e => setSaveId(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleSave() }}
-                placeholder="ej. ruta-callao-miraflores"
-                autoFocus
+                placeholder="ej. ruta-callao-miraflores" autoFocus
                 style={{
                   width: '100%', padding: '8px 10px',
-                  border: '1.5px solid var(--color-border-info)',
-                  borderRadius: 8, fontSize: 13,
-                  background: 'var(--color-background-primary)',
-                  color: 'var(--color-text-primary)',
+                  border: `1.5px solid ${token.colorPrimary}`,
+                  borderRadius: token.borderRadius, fontSize: 13,
+                  background: token.colorBgContainer, color: token.colorText,
                   outline: 'none', boxSizing: 'border-box',
-                }}
-              />
-              <div style={{ fontSize: 11, color: 'var(--color-text-tertiary)', marginTop: 4 }}>
-                Letras, números, guiones y guiones bajos
-              </div>
+                }} />
             </div>
           )}
 
@@ -551,40 +510,23 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
           <div style={{ display: 'flex', gap: 8 }}>
             {!saveStep ? (
               <>
-                <Button
-                  onClick={handleCalculate}
-                  loading={loading}
-                  disabled={!canCalculate}
+                <Button onClick={handleCalculate} loading={loading} disabled={!canCalculate}
                   type={previewRoute ? 'default' : 'primary'}
                   style={{ flex: previewRoute ? 1 : undefined, width: previewRoute ? undefined : '100%' }}
-                  icon={<SwapOutlined />}
-                >
+                  icon={<SwapOutlined />}>
                   {previewRoute ? 'Recalcular' : 'Calcular ruta'}
                 </Button>
                 {previewRoute && (
-                  <Button
-                    type="primary"
-                    icon={<SaveOutlined />}
-                    onClick={() => setSaveStep(true)}
-                    style={{ flex: 1 }}
-                  >
+                  <Button type="primary" icon={<SaveOutlined />} onClick={() => setSaveStep(true)} style={{ flex: 1 }}>
                     Guardar ruta
                   </Button>
                 )}
               </>
             ) : (
               <>
-                <Button onClick={() => setSaveStep(false)} style={{ flex: 1 }}>
-                  Atrás
-                </Button>
-                <Button
-                  type="primary"
-                  icon={<SaveOutlined />}
-                  loading={saving}
-                  disabled={!saveId.trim()}
-                  onClick={handleSave}
-                  style={{ flex: 1 }}
-                >
+                <Button onClick={() => setSaveStep(false)} style={{ flex: 1 }}>Atrás</Button>
+                <Button type="primary" icon={<SaveOutlined />} loading={saving}
+                  disabled={!saveId.trim()} onClick={handleSave} style={{ flex: 1 }}>
                   Confirmar
                 </Button>
               </>
@@ -597,40 +539,31 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
       {collapsed && (
         <div style={{
           position: 'absolute', bottom: 32, left: '50%', transform: 'translateX(-50%)',
-          background: 'var(--color-background-primary)',
-          border: '1.5px solid var(--color-border-info)',
-          borderRadius: 32, padding: '10px 18px', zIndex: 400,
+          background: token.colorBgContainer,
+          border: `2px solid ${token.colorPrimary}`,
+          borderRadius: 32, padding: '10px 20px', zIndex: 400,
           display: 'flex', alignItems: 'center', gap: 10,
-          boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-          fontSize: 13, color: 'var(--color-text-primary)',
-          animation: 'fadeInUp 0.2s ease',
+          boxShadow: token.boxShadow, fontSize: 13, color: token.colorText,
         }}>
           <div style={{
             width: 28, height: 28, borderRadius: '50%',
-            background: 'var(--color-background-info)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0,
+            background: `${token.colorPrimary}18`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}>
-            <AimOutlined style={{ color: 'var(--color-text-info)', fontSize: 13 }} />
+            <AimOutlined style={{ color: token.colorPrimary, fontSize: 13 }} />
           </div>
           <span>
             Selecciona el{' '}
-            <strong style={{ color: pickMode === 'origin' ? '#00418b' : '#f97316' }}>
+            <strong style={{ color: pickMode === 'origin' ? token.colorPrimary : '#ea4335' }}>
               {pickMode === 'origin' ? 'origen' : 'destino'}
             </strong>
             {' '}en el mapa
           </span>
-          <button
-            onClick={() => setPickMode(null)}
-            style={{
-              background: 'var(--color-background-secondary)',
-              border: '1px solid var(--color-border-secondary)',
-              cursor: 'pointer', color: 'var(--color-text-secondary)',
-              padding: '3px 8px', borderRadius: 6, fontSize: 11,
-            }}
-          >
-            Cancelar
-          </button>
+          <button onClick={() => setPickMode(null)} style={{
+            background: token.colorBgLayout, border: `1px solid ${token.colorBorderSecondary}`,
+            cursor: 'pointer', color: token.colorTextSecondary,
+            padding: '4px 10px', borderRadius: 6, fontSize: 11,
+          }}>Cancelar</button>
         </div>
       )}
     </>

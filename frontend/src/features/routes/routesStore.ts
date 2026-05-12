@@ -24,47 +24,47 @@ function saveSelectedRouteId(id: string | null): void {
 }
 
 interface RoutesState {
-  routes:          RouteResource[]
-  loading:         boolean
-  error:           string | null
-  phase:           Phase
-  draftWaypoints:  [number, number][]
-  selectedRouteId: string | null
-  // Preview de ruta calculada (sin guardar aún)
-  previewRoute:    CalculateRouteResult | null
+  routes:           RouteResource[]
+  loading:          boolean
+  error:            string | null
+  phase:            Phase
+  draftWaypoints:   [number, number][]
+  selectedRouteId:  string | null
+  previewRoute:     CalculateRouteResult | null
+  selectedAltIndex: number
 
-  fetchRoutes:        () => Promise<void>
-  startDrawing:       () => void
-  addDraftWaypoint:   (point: [number, number]) => void
-  undoDraftWaypoint:  () => void
-  beginConfirmSave:   () => void
-  closeConfirm:       () => void
-  cancelDraft:        () => void
-  saveDraft:          (routeId: string, travelMode: RouteTravelMode) => Promise<void>
-  deleteRoute:        (routeId: string) => Promise<void>
-  selectRoute:        (routeId: string) => void
-  // Calculador
-  startCalculating:   () => void
-  cancelCalculating:  () => void
-  runCalculate:       (params: {
-    origin:        [number, number]
-    destination:   [number, number]
-    travelMode:    RouteTravelMode
-    avoidTolls:    boolean
-    departureTime: string
+  fetchRoutes:       () => Promise<void>
+  startDrawing:      () => void
+  addDraftWaypoint:  (point: [number, number]) => void
+  undoDraftWaypoint: () => void
+  beginConfirmSave:  () => void
+  closeConfirm:      () => void
+  cancelDraft:       () => void
+  saveDraft:         (routeId: string, travelMode: RouteTravelMode) => Promise<void>
+  deleteRoute:       (routeId: string) => Promise<void>
+  selectRoute:       (routeId: string) => void
+  startCalculating:  () => void
+  cancelCalculating: () => void
+  runCalculate:      (params: {
+    origin:      [number, number]
+    destination: [number, number]
+    travelMode:  RouteTravelMode
+    avoidTolls:  boolean
   }) => Promise<void>
-  savePreviewRoute:   (routeId: string) => Promise<void>
-  clearPreview:       () => void
+  savePreviewRoute:  (routeId: string) => Promise<void>
+  clearPreview:      () => void
+  selectAltIndex:    (i: number) => void
 }
 
 export const useRoutesStore = create<RoutesState>((set, get) => ({
-  routes:          [],
-  loading:         false,
-  error:           null,
-  phase:           'idle',
-  draftWaypoints:  [],
-  selectedRouteId: loadSelectedRouteId(),
-  previewRoute:    null,
+  routes:           [],
+  loading:          false,
+  error:            null,
+  phase:            'idle',
+  draftWaypoints:   [],
+  selectedRouteId:  loadSelectedRouteId(),
+  previewRoute:     null,
+  selectedAltIndex: 0,
 
   fetchRoutes: async () => {
     set({ loading: true, error: null })
@@ -87,9 +87,7 @@ export const useRoutesStore = create<RoutesState>((set, get) => ({
   },
   undoDraftWaypoint: () => set(s => ({ draftWaypoints: s.draftWaypoints.slice(0, -1) })),
   beginConfirmSave:  () => {
-    if (get().draftWaypoints.length < 2) {
-      set({ error: 'Agrega al menos 2 puntos para crear la ruta' }); return
-    }
+    if (get().draftWaypoints.length < 2) { set({ error: 'Agrega al menos 2 puntos' }); return }
     set({ phase: 'confirming', error: null })
   },
   closeConfirm:  () => set({ phase: 'drawing' }),
@@ -103,9 +101,7 @@ export const useRoutesStore = create<RoutesState>((set, get) => ({
       await putRoute(routeId, { waypoints: draftWaypoints, travelMode })
       await get().fetchRoutes()
       set({ phase: 'idle', draftWaypoints: [] })
-    } catch (err) {
-      set({ loading: false, error: (err as Error).message })
-    }
+    } catch (err) { set({ loading: false, error: (err as Error).message }) }
   },
 
   deleteRoute: async (routeId) => {
@@ -116,9 +112,7 @@ export const useRoutesStore = create<RoutesState>((set, get) => ({
       saveSelectedRouteId(next)
       set({ selectedRouteId: next })
       await get().fetchRoutes()
-    } catch (err) {
-      set({ loading: false, error: (err as Error).message })
-    }
+    } catch (err) { set({ loading: false, error: (err as Error).message }) }
   },
 
   selectRoute: (routeId) => {
@@ -127,19 +121,14 @@ export const useRoutesStore = create<RoutesState>((set, get) => ({
     set({ selectedRouteId: next })
   },
 
-  // ── Calculador ────────────────────────────────────────────────────────────
-  startCalculating:  () => set({ phase: 'calculating', error: null, previewRoute: null }),
-  cancelCalculating: () => set({ phase: 'idle', previewRoute: null, error: null }),
+  startCalculating:  () => set({ phase: 'calculating', error: null, previewRoute: null, selectedAltIndex: 0 }),
+  cancelCalculating: () => set({ phase: 'idle', previewRoute: null, error: null, selectedAltIndex: 0 }),
 
-  runCalculate: async ({ origin, destination, travelMode, avoidTolls, departureTime }) => {
-    set({ loading: true, error: null, previewRoute: null })
+  // Sin departureTime — siempre "ahora" para tráfico real
+  runCalculate: async ({ origin, destination, travelMode, avoidTolls }) => {
+    set({ loading: true, error: null, previewRoute: null, selectedAltIndex: 0 })
     try {
-      const result = await calculateRoute({
-        waypoints:     [origin, destination],
-        travelMode,
-        avoidTolls,
-        departureTime,
-      })
+      const result = await calculateRoute({ waypoints: [origin, destination], travelMode, avoidTolls, alternatives: 3 })
       set({ loading: false, previewRoute: result })
     } catch (err: any) {
       set({ loading: false, error: err.message ?? 'Error al calcular la ruta' })
@@ -147,20 +136,19 @@ export const useRoutesStore = create<RoutesState>((set, get) => ({
   },
 
   savePreviewRoute: async (routeId) => {
-    const { previewRoute } = get()
+    const { previewRoute, selectedAltIndex } = get()
     if (!previewRoute) return
     set({ loading: true, error: null })
     try {
-      await putRoute(routeId, {
-        waypoints:  previewRoute.snappedWaypoints,
-        travelMode: previewRoute.travelMode,
-      })
+      const alt = selectedAltIndex === 0
+        ? previewRoute
+        : previewRoute.alternatives[selectedAltIndex - 1]
+      await putRoute(routeId, { waypoints: alt.snappedWaypoints, travelMode: previewRoute.travelMode })
       await get().fetchRoutes()
-      set({ phase: 'idle', previewRoute: null })
-    } catch (err) {
-      set({ loading: false, error: (err as Error).message })
-    }
+      set({ phase: 'idle', previewRoute: null, selectedAltIndex: 0 })
+    } catch (err) { set({ loading: false, error: (err as Error).message }) }
   },
 
-  clearPreview: () => set({ previewRoute: null }),
+  clearPreview:   () => set({ previewRoute: null, selectedAltIndex: 0 }),
+  selectAltIndex: (i) => set({ selectedAltIndex: i }),
 }))
