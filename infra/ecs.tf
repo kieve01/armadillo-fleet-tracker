@@ -42,11 +42,12 @@ resource "aws_ecs_task_definition" "backend" {
     }
 
     environment = [
-      { name = "PORT", value = "3000" },
-      { name = "AWS_REGION", value = var.region },
-      { name = "ROUTES_TABLE", value = aws_dynamodb_table.routes.name },
+      { name = "PORT",                value = "3000" },
+      { name = "AWS_REGION",          value = var.region },
+      { name = "ROUTES_TABLE",        value = aws_dynamodb_table.routes.name },
       { name = "GEOFENCE_COLLECTION", value = var.geofence_collection },
-      { name = "ROUTE_CALCULATOR", value = var.route_calculator },
+      { name = "ROUTE_CALCULATOR",    value = var.route_calculator },
+      { name = "PLACE_INDEX",         value = var.place_index },
     ]
 
     logConfiguration = {
@@ -68,8 +69,8 @@ resource "aws_ecs_service" "backend" {
   launch_type     = "FARGATE"
 
   network_configuration {
-    subnets         = data.aws_subnets.public.ids
-    security_groups = [aws_security_group.ecs.id]
+    subnets          = data.aws_subnets.public.ids
+    security_groups  = [aws_security_group.ecs.id]
     assign_public_ip = true
   }
 

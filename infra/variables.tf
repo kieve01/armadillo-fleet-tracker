@@ -20,7 +20,12 @@ variable "geofence_collection" {
 
 variable "route_calculator" {
   type    = string
-  default = ""
+  default = "armadillo-route-calculator"
+}
+
+variable "place_index" {
+  type    = string
+  default = "armadillo-places"
 }
 
 variable "container_image" {

@@ -1,6 +1,6 @@
 import { PlusOutlined, UndoOutlined, SaveOutlined, CalculatorOutlined } from '@ant-design/icons'
 import { Alert, Button, Divider, Spin, Typography } from 'antd'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useRoutesStore } from '../routesStore'
 import RouteFormModal from './RouteFormModal'
 import RouteListItem from './RouteListItem'
@@ -91,7 +91,7 @@ export default function RoutePanel({ onOpenCalculator }: Props) {
 
       <Divider style={{ margin: '8px 0' }} />
 
-      {error && <Alert type="error" message={error} showIcon style={{ margin: '0 12px 8px' }} />}
+      {error && <Alert type="error" title={error} showIcon style={{ margin: '0 12px 8px' }} />}
 
       <div className="route-panel__list">
         {loading && !routes.length ? (

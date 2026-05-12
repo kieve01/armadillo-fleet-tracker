@@ -114,4 +114,5 @@ jobs:
             -var="stage=${STAGE}" \
             -var="geofence_collection=${{ vars.GEOFENCE_COLLECTION }}" \
             -var="route_calculator=${{ vars.ROUTE_CALCULATOR }}" \
+            -var="place_index=${{ vars.PLACE_INDEX }}" \
             -var="container_image=${{ steps.ecr.outputs.url }}:${IMAGE_TAG}"

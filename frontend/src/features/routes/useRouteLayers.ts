@@ -80,7 +80,7 @@ function addSourceAndLayers(map: Map): void {
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: {
         'line-color': '#00418b', 'line-width': 4, 'line-opacity': 0.85,
-        'line-dasharray': ['literal', [2, 2]],
+        'line-dasharray': [2, 2],
       },
     })
   }

@@ -37,9 +37,9 @@ export default function RouteFormModal({ open, onCancel }: RouteFormModalProps) 
       okText="Guardar"
       cancelText="Cancelar"
       confirmLoading={loading}
-      destroyOnClose
+      destroyOnHidden
     >
-      {error && <Alert type="error" message={error} style={{ marginBottom: 12 }} showIcon />}
+      {error && <Alert type="error" title={error} style={{ marginBottom: 12 }} showIcon />}
       <Form
         form={form}
         layout="vertical"
