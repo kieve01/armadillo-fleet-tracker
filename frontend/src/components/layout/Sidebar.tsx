@@ -14,6 +14,7 @@ import { useUIStore } from '../../store/uiStore'
 import GeofencePanel from '../../features/geofences/components/GeofencePanel'
 import VehiclePanel from '../../features/vehicles/components/VehiclePanel'
 import RoutePanel from '../../features/routes/components/RoutePanel'
+import RouteCalculatorPanel from '../../features/routes/components/RouteCalculatorPanel'
 import logoAmplio from '../../assets/icons/logo_armadillo_amplio.png'
 import '../../styles/sidebar.css'
 
@@ -37,6 +38,7 @@ export default function Sidebar() {
 
   const { token } = theme.useToken()
   const [activePanel, setActivePanel] = useState<string | null>(null)
+  const [calcOpen, setCalcOpen]       = useState(false)
 
   const activeItem  = navItems.find(i => i.key === activePanel)
   const inSubmenu   = !!activePanel && !collapsed
@@ -48,6 +50,7 @@ export default function Sidebar() {
   }
 
   return (
+    <>
     <Sider
       collapsible collapsed={collapsed} trigger={null}
       width={280} collapsedWidth={56}
@@ -196,7 +199,7 @@ export default function Sidebar() {
           <div className="sidebar-panel-content">
             {activePanel === 'vehicles'  && <VehiclePanel />}
             {activePanel === 'geofences' && <GeofencePanel />}
-            {activePanel === 'routes'    && <RoutePanel />}
+            {activePanel === 'routes'    && <RoutePanel onOpenCalculator={() => setCalcOpen(true)} />}
             {activePanel === 'reports'   && (
               <div className="sidebar-empty-state">
                 <FileTextOutlined style={{ fontSize: 28, color: token.colorTextQuaternary }} />
@@ -238,5 +241,12 @@ export default function Sidebar() {
         </Tooltip>
       </div>
     </Sider>
+
+      {/* Panel calculador de rutas — flota sobre el mapa */}
+      <RouteCalculatorPanel
+        open={calcOpen}
+        onClose={() => setCalcOpen(false)}
+      />
+    </>
   )
 }

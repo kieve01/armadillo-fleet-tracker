@@ -25,32 +25,32 @@ class KalmanFilter {
   reset(z: number) { this.x = z; this.P = 1; this.k = 1 }
 }
 
-// ─── Estado de animación por dispositivo ─────────────────────────────────────
-interface AnimState {
-  // Posición de partida de este segmento
-  fromLat: number; fromLng: number; fromHeading: number
-  // Posición destino (último update recibido)
-  toLat: number; toLng: number; toHeading: number
-  // Velocidad (m/s) y heading para dead reckoning más allá del destino
-  speedMs: number; drHeading: number
-  // Timing
-  startTime: number      // performance.now() cuando arrancó este segmento
-  segmentMs: number      // duración estimada del segmento (intervalo del tracker)
-  lastUpdateAt: number   // timestamp epoch del último update recibido
-  rafId: number | null
+// ─── Haversine ───────────────────────────────────────────────────────────────
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R  = 6_371_000
+  const φ1 = lat1 * Math.PI / 180
+  const φ2 = lat2 * Math.PI / 180
+  const Δφ = (lat2 - lat1) * Math.PI / 180
+  const Δλ = (lng2 - lng1) * Math.PI / 180
+  const a  = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// Posición animada actual (se actualiza frame a frame)
+// ─── Tipos ───────────────────────────────────────────────────────────────────
+interface AnimState {
+  fromLat: number; fromLng: number; fromHeading: number
+  toLat:   number; toLng:   number; toHeading:   number
+  startTime: number
+  segmentMs: number
+}
+
 interface AnimPos { lat: number; lng: number; heading: number }
 
-// ─── Helpers matemáticos ─────────────────────────────────────────────────────
-const DEG2RAD = Math.PI / 180
-const RAD2DEG = 180 / Math.PI
-const EARTH_R = 6_371_000 // metros
+// ─── Constantes ──────────────────────────────────────────────────────────────
+// Si el nuevo punto está a más de esta distancia, teleportar directamente
+const MAX_ANIM_DISTANCE_M = 500
 
-function easeInOut(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2
-}
+function easeOut(t: number): number { return 1 - Math.pow(1 - Math.min(t, 1), 3) }
 
 function lerpAngle(a: number, b: number, t: number): number {
   let d = b - a
@@ -59,25 +59,25 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + d * t
 }
 
-// Proyecta una posición hacia adelante usando velocidad y heading (dead reckoning)
-function projectPosition(lat: number, lng: number, headingDeg: number, speedMs: number, elapsedS: number): { lat: number; lng: number } {
-  if (speedMs < 0.5) return { lat, lng } // detenido — no proyectar
-  const dist    = speedMs * elapsedS
-  const heading = headingDeg * DEG2RAD
-  const dLat    = (dist * Math.cos(heading)) / EARTH_R * RAD2DEG
-  const dLng    = (dist * Math.sin(heading)) / (EARTH_R * Math.cos(lat * DEG2RAD)) * RAD2DEG
-  return { lat: lat + dLat, lng: lng + dLng }
+function estimateInterval(prev: string | undefined, next: string): number {
+  if (!prev) return 15_000
+  const delta = new Date(next).getTime() - new Date(prev).getTime()
+  return Math.min(Math.max(delta, 5_000), 90_000)
 }
 
 function resolveWsUrl(): string | null {
-  const v = import.meta.env.VITE_WS_URL as string | undefined
-  return v ?? null
+  return (import.meta.env.VITE_WS_URL as string | undefined) ?? null
 }
 
-function devicesToFC(
-  devices: Device[],
-  animPos: Map<string, AnimPos>,
-): GeoJSON.FeatureCollection {
+// ─── Estado de módulo — posición animada accesible desde fuera ───────────────
+let _animPosMap = new Map<string, AnimPos>()
+
+export function getAnimatedPosition(trackerName: string, deviceId: string): AnimPos | undefined {
+  return _animPosMap.get(`${trackerName}/${deviceId}`)
+}
+
+// ─── GeoJSON builder ─────────────────────────────────────────────────────────
+function devicesToFC(devices: Device[], animPos: Map<string, AnimPos>): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
     features: devices.map((d) => {
@@ -90,7 +90,7 @@ function devicesToFC(
           tracker:    d.trackerName,
           speed:      d.speed,
           heading:    anim?.heading ?? d.heading ?? 0,
-          hasHeading: (d.heading != null) ? 1 : 0,
+          hasHeading: d.heading != null ? 1 : 0,
         },
         geometry: { type: 'Point', coordinates: [anim?.lng ?? d.lng, anim?.lat ?? d.lat] },
       }
@@ -98,6 +98,7 @@ function devicesToFC(
   }
 }
 
+// ─── Layers ──────────────────────────────────────────────────────────────────
 function addSourceAndLayers(map: MLMap) {
   if (!map.getSource(SOURCE_ID)) {
     map.addSource(SOURCE_ID, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
@@ -107,26 +108,21 @@ function addSourceAndLayers(map: MLMap) {
       id: CIRCLE_LAYER, type: 'circle', source: SOURCE_ID,
       paint: {
         'circle-radius': 9, 'circle-color': '#00418b',
-        'circle-stroke-width': 2.5, 'circle-stroke-color': '#ffffff', 'circle-opacity': 0.92,
+        'circle-stroke-width': 2.5, 'circle-stroke-color': '#ffffff',
+        'circle-opacity': 0.92,
       },
     })
   }
-  // Flecha: visible si hay heading válido (hasHeading=1), independiente de speed
   if (!map.getLayer(ARROW_LAYER)) {
     map.addLayer({
       id: ARROW_LAYER, type: 'symbol', source: SOURCE_ID,
       layout: {
-        'icon-image': 'vehicle-arrow',
-        'icon-size':  0.55,
+        'icon-image': 'vehicle-arrow', 'icon-size': 0.55,
         'icon-rotate': ['get', 'heading'],
         'icon-rotation-alignment': 'map',
-        'icon-allow-overlap': true,
-        'icon-ignore-placement': true,
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
       },
-      paint: {
-        // Visible si hasHeading=1; fade-in/out suave via opacity expression
-        'icon-opacity': ['case', ['==', ['get', 'hasHeading'], 1], 1, 0],
-      },
+      paint: { 'icon-opacity': ['case', ['==', ['get', 'hasHeading'], 1], 1, 0] },
     })
   }
   if (!map.getLayer(LABEL_LAYER)) {
@@ -136,9 +132,7 @@ function addSourceAndLayers(map: MLMap) {
         'text-field': ['get', 'id'], 'text-size': 11,
         'text-offset': [0, 1.8], 'text-anchor': 'top',
       },
-      paint: {
-        'text-color': '#00418b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5,
-      },
+      paint: { 'text-color': '#00418b', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
     })
   }
 }
@@ -155,14 +149,7 @@ function loadArrowIcon(map: MLMap): Promise<void> {
   })
 }
 
-// Estima el intervalo del tracker (ms) a partir de los dos últimos timestamps
-// Clampado entre 5s y 90s para absorber anomalías
-function estimateInterval(prevUpdatedAt: string | undefined, newUpdatedAt: string): number {
-  if (!prevUpdatedAt) return 15_000
-  const delta = new Date(newUpdatedAt).getTime() - new Date(prevUpdatedAt).getTime()
-  return Math.min(Math.max(delta, 5_000), 90_000)
-}
-
+// ─── Hook principal ───────────────────────────────────────────────────────────
 export function useVehicleLayers() {
   const map                  = useMapStore(s => s.map)
   const mapReady             = useMapStore(s => s.mapReady)
@@ -175,68 +162,52 @@ export function useVehicleLayers() {
   const setPendingLocation   = useVehiclesStore(s => s.setPendingLocation)
 
   const fcRef        = useRef<GeoJSON.FeatureCollection>({ type: 'FeatureCollection', features: [] })
-  const animPosRef   = useRef<Map<string, AnimPos>>(new Map())
+  const animPosRef   = useRef<Map<string, AnimPos>>(_animPosMap)
   const animStateRef = useRef<Map<string, AnimState>>(new Map())
   const kalmanRef    = useRef<Map<string, { lat: KalmanFilter; lng: KalmanFilter }>>(new Map())
   const mapRef       = useRef<MLMap | null>(null)
-  // Guarda el último updatedAt por device para calcular el intervalo real
+  const mapReadyRef  = useRef<boolean>(false)
   const lastUpdateAtRef = useRef<Map<string, string>>(new Map())
-  // RAF global — un solo loop para todos los devices
-  const globalRafRef = useRef<number | null>(null)
-  // Controla si la pestaña está visible (Page Visibility API)
-  const isVisibleRef = useRef<boolean>(true)
-  // Marca si el mapa está listo para recibir datos
-  const mapReadyRef = useRef<boolean>(false)
+  const globalRafRef    = useRef<number | null>(null)
+  // true solo cuando la pestaña es visible Y el usuario la está viendo
+  const isVisibleRef    = useRef<boolean>(document.visibilityState === 'visible')
 
   useEffect(() => { mapRef.current = map ?? null }, [map])
   useEffect(() => { mapReadyRef.current = !!mapReady }, [mapReady])
 
-  // ─── RAF global: un solo loop anima TODOS los devices ────────────────────
+  // ── Actualizar mapa con el FC cacheado ────────────────────────────────────
+  const flushToMap = useCallback(() => {
+    const source = mapRef.current?.getSource(SOURCE_ID) as GeoJSONSource | undefined
+    source?.setData(fcRef.current)
+  }, [])
+
+  // ── RAF global: solo corre cuando la pestaña es visible ───────────────────
   const startGlobalRaf = useCallback(() => {
-    if (globalRafRef.current) return // ya corriendo
+    if (globalRafRef.current || !isVisibleRef.current) return
 
     const tick = (now: number) => {
       globalRafRef.current = null
-      const currentMap = mapRef.current
-      if (!currentMap || !mapReadyRef.current) return
+      if (!isVisibleRef.current) return  // pestaña oculta — parar
 
       let anyActive = false
       const features = [...fcRef.current.features]
       let changed = false
 
       animStateRef.current.forEach((state: AnimState, key: string) => {
-        const parts    = key.split('/')
-        const deviceId = parts.slice(1).join('/')
-        const tracker  = parts[0]
+        const elapsed = now - state.startTime
+        const t       = elapsed / state.segmentMs
+        if (t >= 1) return  // terminada — quieto en destino
 
-        // Fase 1: interpolación entre fromPos y toPos
-        const elapsed  = now - state.startTime
-        const t        = elapsed / state.segmentMs
-
-        let lat: number, lng: number, heading: number
-
-        if (t <= 1) {
-          // Dentro del segmento — interpolar suavemente
-          const te  = easeInOut(Math.min(t, 1))
-          lat       = state.fromLat + (state.toLat - state.fromLat) * te
-          lng       = state.fromLng + (state.toLng - state.fromLng) * te
-          heading   = lerpAngle(state.fromHeading, state.toHeading, te)
-          anyActive = true
-        } else {
-          // Fase 2: dead reckoning — el vehículo sigue moviéndose más allá del destino
-          // solo si lleva velocidad; si está detenido se queda en toLat/toLng
-          const overElapsed = (elapsed - state.segmentMs) / 1000 // segundos de sobra
-          const dr = projectPosition(state.toLat, state.toLng, state.drHeading, state.speedMs, overElapsed)
-          lat     = dr.lat
-          lng     = dr.lng
-          heading = state.drHeading
-          // Seguimos animando mientras no llegue el próximo update (máx 2× el intervalo)
-          if (elapsed < state.segmentMs * 2) anyActive = true
-        }
+        const te      = easeOut(t)
+        const lat     = state.fromLat + (state.toLat - state.fromLat) * te
+        const lng     = state.fromLng + (state.toLng - state.fromLng) * te
+        const heading = lerpAngle(state.fromHeading, state.toHeading, te)
 
         animPosRef.current.set(key, { lat, lng, heading })
+        anyActive = true
 
-        // Actualizar el feature correspondiente en el FC cacheado
+        const [tracker, ...rest] = key.split('/')
+        const deviceId = rest.join('/')
         const fi = features.findIndex(
           f => f.properties?.id === deviceId && f.properties?.tracker === tracker,
         )
@@ -253,43 +224,34 @@ export function useVehicleLayers() {
       if (changed) {
         const newFc = { ...fcRef.current, features }
         fcRef.current = newFc
-        const source = currentMap.getSource(SOURCE_ID) as GeoJSONSource | undefined
-        source?.setData(newFc)
+        flushToMap()
       }
 
-      if (anyActive) {
-        globalRafRef.current = requestAnimationFrame(tick)
-      }
+      if (anyActive) globalRafRef.current = requestAnimationFrame(tick)
     }
 
     globalRafRef.current = requestAnimationFrame(tick)
-  }, [])
+  }, [flushToMap])
 
-  // ─── Page Visibility API: pausa RAF cuando pestaña oculta ────────────────
+  // ── Page Visibility API ────────────────────────────────────────────────────
   useEffect(() => {
     const onVisibilityChange = () => {
-      isVisibleRef.current = document.visibilityState === 'visible'
+      const visible = document.visibilityState === 'visible'
+      isVisibleRef.current = visible
 
-      if (isVisibleRef.current) {
-        // Volvemos a la pestaña: recalibrar startTime de todas las animaciones
-        // para que no haya salto por el tiempo que estuvo oculta
-        const now = performance.now()
-        animStateRef.current.forEach((state: AnimState, key: string) => {
-          // Reset: la posición "desde" es la animada actual
-          const cur = animPosRef.current.get(key)
-          if (cur) {
-            animStateRef.current.set(key, {
-              ...state,
-              fromLat:     cur.lat,
-              fromLng:     cur.lng,
-              fromHeading: cur.heading,
-              startTime:   now,
-            })
-          }
-        })
-        startGlobalRaf()
+      if (visible) {
+        // Volvemos a la pestaña:
+        // 1. Posicionar TODOS los marcadores en su última coordenada GPS real
+        //    (sin animar, sin recuperar tiempo acumulado)
+        // 2. Limpiar todas las animaciones pendientes
+        animStateRef.current.clear()
+
+        // Reconstruir FC con posiciones del store (ya actualizadas por WS en background)
+        // El effect de devices se encargará del rebuild completo.
+        // Aquí solo forzamos flush inmediato.
+        flushToMap()
       } else {
-        // Pestaña oculta: cancelar RAF para no quemar CPU en background
+        // Pestaña oculta: cancelar RAF — cero CPU en background
         if (globalRafRef.current) {
           cancelAnimationFrame(globalRafRef.current)
           globalRafRef.current = null
@@ -299,16 +261,16 @@ export function useVehicleLayers() {
 
     document.addEventListener('visibilitychange', onVisibilityChange)
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
-  }, [startGlobalRaf])
+  }, [flushToMap])
 
-  // ─── Upsert envuelto: Kalman + animación con intervalo dinámico ──────────
+  // ── Upsert: Kalman + animación solo si pestaña visible ────────────────────
   const wrappedUpsertRef = useRef<typeof upsertDevicePosition>((e) => upsertDevicePosition(e))
 
   useEffect(() => {
     wrappedUpsertRef.current = (event) => {
       const key = `${event.trackerName}/${event.deviceId}`
 
-      // Kalman — suaviza ruido GPS
+      // Kalman
       let kf = kalmanRef.current.get(key)
       if (!kf) {
         kf = { lat: new KalmanFilter(), lng: new KalmanFilter() }
@@ -317,38 +279,51 @@ export function useVehicleLayers() {
       const fLat = kf.lat.filter(event.lat)
       const fLng = kf.lng.filter(event.lng)
 
-      // Intervalo dinámico según la fuente (Jetson ~15s, Frotcom ~60s, etc.)
-      const prevUpdatedAt = lastUpdateAtRef.current.get(key)
-      const segmentMs     = estimateInterval(prevUpdatedAt, event.updatedAt)
+      // Intervalo dinámico
+      const prevAt    = lastUpdateAtRef.current.get(key)
+      const segmentMs = estimateInterval(prevAt, event.updatedAt)
       lastUpdateAtRef.current.set(key, event.updatedAt)
 
-      // Posición "desde" = posición animada actual
-      const cur       = animPosRef.current.get(key)
-      const fromLat   = cur?.lat     ?? fLat
-      const fromLng   = cur?.lng     ?? fLng
-      const fromHdg   = cur?.heading ?? event.heading ?? 0
-      const toHdg     = event.heading ?? fromHdg
-      const speedMs   = event.speed != null ? event.speed / 3.6 : 0 // km/h → m/s
+      // Posición actual animada
+      const cur     = animPosRef.current.get(key)
+      const fromLat = cur?.lat     ?? fLat
+      const fromLng = cur?.lng     ?? fLng
+      const fromHdg = cur?.heading ?? event.heading ?? 0
+      const toHdg   = event.heading ?? fromHdg
 
+      // Salto irreal → teleportar y resetear Kalman
+      const distM = haversineM(fromLat, fromLng, fLat, fLng)
+      if (distM > MAX_ANIM_DISTANCE_M) {
+        kf.lat.reset(event.lat)
+        kf.lng.reset(event.lng)
+        animPosRef.current.set(key, { lat: event.lat, lng: event.lng, heading: toHdg })
+        animStateRef.current.delete(key)
+        upsertDevicePosition({ ...event })
+        return
+      }
+
+      // Pestaña oculta → no animar, actualizar posición directamente al punto real
+      if (!isVisibleRef.current) {
+        animPosRef.current.set(key, { lat: fLat, lng: fLng, heading: toHdg })
+        animStateRef.current.delete(key)
+        upsertDevicePosition({ ...event, lat: fLat, lng: fLng })
+        return
+      }
+
+      // Pestaña visible → animación suave
       animStateRef.current.set(key, {
         fromLat, fromLng, fromHeading: fromHdg,
         toLat: fLat, toLng: fLng, toHeading: toHdg,
-        speedMs, drHeading: toHdg,
-        startTime:    performance.now(),
+        startTime: performance.now(),
         segmentMs,
-        lastUpdateAt: new Date(event.updatedAt).getTime(),
-        rafId:        null,
       })
 
-      // Arrancar/continuar el RAF global
-      if (isVisibleRef.current) startGlobalRaf()
-
-      // Propagar al store con coordenadas filtradas
+      startGlobalRaf()
       upsertDevicePosition({ ...event, lat: fLat, lng: fLng })
     }
   }, [upsertDevicePosition, startGlobalRaf])
 
-  // ─── WebSocket con reconexión robusta ─────────────────────────────────────
+  // ── WebSocket con backoff exponencial ─────────────────────────────────────
   useEffect(() => {
     if (!mapReady) return
     fetchAll()
@@ -359,17 +334,13 @@ export function useVehicleLayers() {
     let socket:         WebSocket | null = null
     let reconnectTimer: number | undefined
     let isStopped       = false
-    let backoffMs       = 1_500   // backoff inicial
-    const MAX_BACKOFF   = 30_000  // máximo 30s entre intentos
+    let backoffMs       = 1_500
+    const MAX_BACKOFF   = 30_000
 
     const connect = () => {
       if (isStopped) return
       socket = new WebSocket(wsUrl)
-
-      socket.onopen = () => {
-        backoffMs = 1_500 // reset backoff al conectar exitosamente
-      }
-
+      socket.onopen  = () => { backoffMs = 1_500 }
       socket.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data as string) as {
@@ -385,22 +356,17 @@ export function useVehicleLayers() {
           }
         } catch {}
       }
-
       socket.onclose = (ev) => {
-        if (isStopped) return
-        // No reconectar en cierre limpio intencional (code 1000)
-        if (ev.code === 1000) return
+        if (isStopped || ev.code === 1000) return
         reconnectTimer = window.setTimeout(() => {
-          backoffMs = Math.min(backoffMs * 1.5, MAX_BACKOFF) // backoff exponencial
+          backoffMs = Math.min(backoffMs * 1.5, MAX_BACKOFF)
           connect()
         }, backoffMs)
       }
-
       socket.onerror = () => { socket?.close() }
     }
 
-    // Reconectar también cuando la pestaña vuelve a ser visible
-    // (el WS puede haberse caído mientras estaba en background)
+    // Reconectar al volver a la pestaña si el socket se cayó
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
         if (!socket || socket.readyState === WebSocket.CLOSED) {
@@ -410,7 +376,6 @@ export function useVehicleLayers() {
       }
     }
     document.addEventListener('visibilitychange', onVisible)
-
     connect()
 
     return () => {
@@ -422,7 +387,7 @@ export function useVehicleLayers() {
     }
   }, [mapReady, fetchAll])
 
-  // ─── Reload layers tras cambio de estilo de mapa ─────────────────────────
+  // ── Reload layers tras cambio de estilo ───────────────────────────────────
   useEffect(() => {
     if (!map || !mapReady) return
     const setup = () => {
@@ -437,7 +402,7 @@ export function useVehicleLayers() {
     return () => { map.off('styledata', setup) }
   }, [map, mapReady])
 
-  // ─── Click para colocar dispositivo ──────────────────────────────────────
+  // ── Click para colocar dispositivo ────────────────────────────────────────
   useEffect(() => {
     if (!map) return
     const canvas = map.getCanvas()
@@ -450,7 +415,7 @@ export function useVehicleLayers() {
     canvas.style.cursor = ''
   }, [map, phase, setPendingLocation])
 
-  // ─── Reconstruir GeoJSON cuando cambia la lista de devices ───────────────
+  // ── Rebuild GeoJSON cuando cambian devices ────────────────────────────────
   useEffect(() => {
     if (!map || !mapReady) return
     if ((map as any)._removed) return

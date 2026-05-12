@@ -5,4 +5,5 @@ export const locationClient = new LocationClient({
 })
 
 export const GEOFENCE_COLLECTION = process.env.GEOFENCE_COLLECTION ?? 'armadillo-geofences'
-export const ROUTE_CALCULATOR = process.env.ROUTE_CALCULATOR
+export const ROUTE_CALCULATOR    = process.env.ROUTE_CALCULATOR
+export const PLACE_INDEX         = process.env.PLACE_INDEX

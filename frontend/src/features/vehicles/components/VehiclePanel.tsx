@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Alert, Button, Popconfirm, Spin, Tooltip, Typography } from 'antd'
 import {
   CarOutlined,
@@ -16,6 +16,10 @@ import { useVehiclesStore } from '../vehiclesStore'
 import { useMapStore } from '../../../store/mapStore'
 import PlaceDeviceModal from './PlaceDeviceModal'
 import CreateTrackerModal from './CreateTrackerModal'
+
+// Importamos el ref de posiciones animadas desde useVehicleLayers
+// para que flyTo use la posición visual real y no la del store
+import { getAnimatedPosition } from '../useVehicleLayers'
 
 function colorFromTracker(trackerName: string): string {
   const palette = ['#00418b', '#0f766e', '#9a3412', '#6d28d9', '#0369a1', '#be123c']
@@ -39,7 +43,6 @@ export default function VehiclePanel() {
   const hiddenTrackers      = useVehiclesStore((s) => s.hiddenTrackers)
   const hiddenDevices       = useVehiclesStore((s) => s.hiddenDevices)
   const deleteTracker       = useVehiclesStore((s) => s.deleteTracker)
-  const deleteDevice        = useVehiclesStore((s) => s.deleteDevice)
   const startPlace          = useVehiclesStore((s) => s.startPlace)
   const cancelPlace         = useVehiclesStore((s) => s.cancelPlace)
   const selectDevice        = useVehiclesStore((s) => s.selectDevice)
@@ -54,8 +57,17 @@ export default function VehiclePanel() {
   useEffect(() => { return () => { cancelPlace() } }, [cancelPlace])
 
   const flyToDevice = (deviceId: string, trackerName: string) => {
-    const d = devices.find((d) => d.deviceId === deviceId && d.trackerName === trackerName)
-    if (d && map) map.flyTo({ center: [d.lng, d.lat], zoom: 15 })
+    // Usa la posición animada actual si está disponible,
+    // si no cae al valor del store (primer load antes de animación)
+    const animated = getAnimatedPosition(trackerName, deviceId)
+    const storeDevice = devices.find((d) => d.deviceId === deviceId && d.trackerName === trackerName)
+
+    const lat = animated?.lat ?? storeDevice?.lat
+    const lng = animated?.lng ?? storeDevice?.lng
+
+    if (lat != null && lng != null && map) {
+      map.flyTo({ center: [lng, lat], zoom: 15 })
+    }
     selectDevice(deviceId)
   }
 
@@ -106,7 +118,7 @@ export default function VehiclePanel() {
                 Vehículo
               </Button>
 
-              {/* Sort toggle — icon buttons, right-aligned */}
+              {/* Sort toggle */}
               <div className="vehicle-sort-toggle">
                 <Tooltip title="Ordenar por actividad" mouseEnterDelay={0.4}>
                   <button
@@ -224,23 +236,13 @@ export default function VehiclePanel() {
                                 {minutesAgo === 0 ? 'ahora' : `hace ${minutesAgo} min`}
                               </Typography.Text>
                             </div>
+                            {/* Visibilidad — se mantiene */}
                             <Button
                               size="small" type="text"
                               icon={isDeviceHidden ? <EyeInvisibleOutlined /> : <EyeOutlined />}
                               onClick={(e) => { e.stopPropagation(); toggleDeviceVisibility(d.trackerName, d.deviceId) }}
                             />
-                            <Popconfirm
-                              title="¿Eliminar vehículo?"
-                              description="Se eliminará solo este dispositivo del tracker."
-                              okText="Eliminar" cancelText="Cancelar"
-                              okButtonProps={{ danger: true }}
-                              onConfirm={() => deleteDevice(d.trackerName, d.deviceId)}
-                            >
-                              <Button
-                                size="small" type="text" danger icon={<DeleteOutlined />}
-                                onClick={(e) => e.stopPropagation()}
-                              />
-                            </Popconfirm>
+                            {/* Botón eliminar vehículo — eliminado según requerimiento */}
                             <span className={`vehicle-status-dot${isActive ? ' vehicle-status-dot--active' : ''}`} />
                           </div>
                         )

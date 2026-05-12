@@ -1,32 +1,33 @@
-import { PlusOutlined, UndoOutlined, SaveOutlined } from '@ant-design/icons'
+import { PlusOutlined, UndoOutlined, SaveOutlined, CalculatorOutlined } from '@ant-design/icons'
 import { Alert, Button, Divider, Spin, Typography } from 'antd'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRoutesStore } from '../routesStore'
 import RouteFormModal from './RouteFormModal'
 import RouteListItem from './RouteListItem'
 import '../../../styles/routes.css'
 
-export default function RoutePanel() {
-  const routes = useRoutesStore((state) => state.routes)
-  const loading = useRoutesStore((state) => state.loading)
-  const error = useRoutesStore((state) => state.error)
-  const phase = useRoutesStore((state) => state.phase)
-  const draftWaypoints = useRoutesStore((state) => state.draftWaypoints)
-  const selectedRouteId = useRoutesStore((state) => state.selectedRouteId)
-  const fetchRoutes = useRoutesStore((state) => state.fetchRoutes)
-  const startDrawing = useRoutesStore((state) => state.startDrawing)
-  const undoDraftWaypoint = useRoutesStore((state) => state.undoDraftWaypoint)
-  const beginConfirmSave = useRoutesStore((state) => state.beginConfirmSave)
-  const closeConfirm = useRoutesStore((state) => state.closeConfirm)
-  const cancelDraft = useRoutesStore((state) => state.cancelDraft)
-  const selectRoute = useRoutesStore((state) => state.selectRoute)
+// El panel de calculador se abre a nivel de mapa, controlado desde aquí
+// a través del store para no romper el layout del sidebar
+interface Props { onOpenCalculator: () => void }
+
+export default function RoutePanel({ onOpenCalculator }: Props) {
+  const routes          = useRoutesStore(s => s.routes)
+  const loading         = useRoutesStore(s => s.loading)
+  const error           = useRoutesStore(s => s.error)
+  const phase           = useRoutesStore(s => s.phase)
+  const draftWaypoints  = useRoutesStore(s => s.draftWaypoints)
+  const selectedRouteId = useRoutesStore(s => s.selectedRouteId)
+  const fetchRoutes     = useRoutesStore(s => s.fetchRoutes)
+  const startDrawing    = useRoutesStore(s => s.startDrawing)
+  const undoDraftWaypoint = useRoutesStore(s => s.undoDraftWaypoint)
+  const beginConfirmSave  = useRoutesStore(s => s.beginConfirmSave)
+  const closeConfirm      = useRoutesStore(s => s.closeConfirm)
+  const cancelDraft       = useRoutesStore(s => s.cancelDraft)
+  const selectRoute       = useRoutesStore(s => s.selectRoute)
 
   useEffect(() => {
     fetchRoutes()
-
-    return () => {
-      cancelDraft()
-    }
+    return () => { cancelDraft() }
   }, [fetchRoutes, cancelDraft])
 
   const isDrawing = phase === 'drawing'
@@ -36,15 +37,25 @@ export default function RoutePanel() {
     <div className="route-panel">
       <div className="route-panel__toolbar">
         {!isDrawing ? (
-          <Button
-            size="small"
-            type="primary"
-            icon={<PlusOutlined />}
-            className="route-panel__new-button"
-            onClick={startDrawing}
-          >
-            Nueva ruta
-          </Button>
+          <div style={{ display: 'flex', gap: 6, width: '100%' }}>
+            <Button
+              size="small"
+              icon={<PlusOutlined />}
+              onClick={startDrawing}
+              style={{ flex: 1 }}
+            >
+              Trazar ruta
+            </Button>
+            <Button
+              size="small"
+              type="primary"
+              icon={<CalculatorOutlined />}
+              onClick={onOpenCalculator}
+              style={{ flex: 1 }}
+            >
+              Calcular ruta
+            </Button>
+          </div>
         ) : (
           <div className="route-panel__draft">
             <div className="route-panel__draft-message">
@@ -55,15 +66,12 @@ export default function RoutePanel() {
                 Click para agregar puntos. Doble click en el mapa para confirmar.
               </Typography.Text>
             </div>
-
             <div className="route-panel__actions">
               <Button size="small" icon={<UndoOutlined />} onClick={undoDraftWaypoint}>
                 Deshacer
               </Button>
               <Button
-                size="small"
-                type="primary"
-                icon={<SaveOutlined />}
+                size="small" type="primary" icon={<SaveOutlined />}
                 onClick={beginConfirmSave}
                 disabled={draftWaypoints.length < 2}
               >
@@ -87,15 +95,13 @@ export default function RoutePanel() {
 
       <div className="route-panel__list">
         {loading && !routes.length ? (
-          <div className="route-panel__loading">
-            <Spin size="small" />
-          </div>
+          <div className="route-panel__loading"><Spin size="small" /></div>
         ) : routes.length === 0 ? (
           <Typography.Text type="secondary" className="route-panel__empty">
             No hay rutas guardadas
           </Typography.Text>
         ) : (
-          routes.map((route) => (
+          routes.map(route => (
             <RouteListItem
               key={route.routeId}
               route={route}
