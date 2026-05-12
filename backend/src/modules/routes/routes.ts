@@ -96,7 +96,6 @@ async function callGeoRoutes(input: CalcInput): Promise<CalcOutput> {
     TravelMode:        mode,
     DepartureTime:     (input.departureTime ?? new Date()).toISOString(),
     LegGeometryFormat: 'Simple',
-    MeasurementSystem: 'Metric',
     // Opciones de evitación según modo
     ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
     ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
