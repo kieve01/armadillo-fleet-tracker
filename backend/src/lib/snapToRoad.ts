@@ -1,21 +1,11 @@
-import { SearchPlaceIndexForPositionCommand } from '@aws-sdk/client-location'
-import { locationClient, ROUTE_CALCULATOR } from './locationClient'
+import { SnapToRoadsCommand } from '@aws-sdk/client-geo-routes'
+import { geoRoutesClient } from './locationClient'
 
 // ─── Configuración de umbral ─────────────────────────────────────────────────
-// Distancia máxima en metros para aplicar snap.
-// Si el GPS está más lejos que esto de cualquier vía, se asume zona especial
-// (cochera, punto de carga, patio) y se deja la coordenada GPS original.
-const SNAP_MAX_DISTANCE_M = 35
+const SNAP_MAX_DISTANCE_M  = 35
+const SNAP_MIN_SPEED_KMH   = 8
+const SNAP_FULL_SPEED_KMH  = 15
 
-// Velocidad mínima en km/h para aplicar snap.
-// Por debajo de esto el vehículo está maniobrando — no se toca la posición.
-const SNAP_MIN_SPEED_KMH = 8
-
-// Velocidad a partir de la cual snap es seguro aplicar con umbral normal.
-// Entre MIN y FULL se usa un umbral más conservador (mitad de distancia).
-const SNAP_FULL_SPEED_KMH = 15
-
-// ─── Haversine: distancia en metros entre dos puntos ────────────────────────
 function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R  = 6_371_000
   const φ1 = lat1 * Math.PI / 180
@@ -26,64 +16,48 @@ function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
 }
 
-// ─── Snap-to-road principal ──────────────────────────────────────────────────
-// Devuelve la posición corregida (o la original si no aplica snap).
-// Nunca lanza — en caso de error retorna la posición original para no bloquear.
+/**
+ * Snap-to-road usando la API v2 (SnapToRoads).
+ * La v2 tiene un endpoint dedicado — mucho más directo y preciso que el hack
+ * de CalculateRoute con desplazamiento de 1m que usábamos con la v1.
+ * Nunca lanza: en caso de error retorna la posición original.
+ */
 export async function snapToRoad(
   lat: number,
   lng: number,
   speedKmh: number | null,
 ): Promise<{ lat: number; lng: number; snapped: boolean }> {
 
-  // Sin ROUTE_CALCULATOR configurado → no hacer nada
-  if (!ROUTE_CALCULATOR) return { lat, lng, snapped: false }
-
-  // Vehículo lento o detenido → probablemente en cochera o patio, no tocar
   const speed = speedKmh ?? 0
   if (speed < SNAP_MIN_SPEED_KMH) return { lat, lng, snapped: false }
 
-  // Umbral dinámico: más conservador a velocidades intermedias
   const threshold = speed < SNAP_FULL_SPEED_KMH
     ? SNAP_MAX_DISTANCE_M / 2
     : SNAP_MAX_DISTANCE_M
 
   try {
-    // Usamos SearchPlaceIndexForPosition para encontrar la vía más cercana.
-    // AWS Location no tiene SnapToRoads directo en el SDK v3, pero podemos
-    // aprovechar el índice de lugares para obtener la posición en vía más próxima.
-    // Para snap real usamos CalculateRoute con origen = destino = punto GPS,
-    // que devuelve el punto snapped a la red vial.
-    const { locationClient: client } = await import('./locationClient')
-
-    // Estrategia: calcular ruta de 1 metro desde el punto hacia sí mismo.
-    // AWS Location internamente snapea ambos extremos a la vía más cercana.
-    const { CalculateRouteCommand } = await import('@aws-sdk/client-location')
-    const result = await locationClient.send(new CalculateRouteCommand({
-      CalculatorName: ROUTE_CALCULATOR,
-      DeparturePosition:   [lng, lat],
-      DestinationPosition: [lng + 0.00001, lat + 0.00001], // desplazamiento mínimo (~1m)
-      TravelMode: 'Car',
-      IncludeLegGeometry: true,
+    const resp = await geoRoutesClient.send(new SnapToRoadsCommand({
+      TracePoints: [{ Position: [lng, lat] }],
+      TravelMode:  'Car',
+      // Desactivamos SnapRadius explícito — dejamos el default de la API (50m)
+      // y luego filtramos nosotros con threshold más conservador
     }))
 
-    const firstPoint = result.Legs?.[0]?.Geometry?.LineString?.[0]
-    if (!firstPoint || firstPoint.length < 2) return { lat, lng, snapped: false }
+    const snappedPt = resp.Notices?.[0]?.TracePointIndexes != null
+      ? null  // punto rechazado por la API (fuera de red vial)
+      : resp.SnappedGeometry?.LineString?.[0]
 
-    const snappedLng = firstPoint[0]
-    const snappedLat = firstPoint[1]
-
-    // Verificar distancia entre GPS original y punto snapped
-    const distM = haversineM(lat, lng, snappedLat, snappedLng)
-
-    // Si está demasiado lejos del road → zona especial, respetar GPS original
-    if (distM > threshold) {
+    if (!snappedPt || !Array.isArray(snappedPt) || snappedPt.length < 2) {
       return { lat, lng, snapped: false }
     }
 
-    return { lat: snappedLat, lng: snappedLng, snapped: true }
+    const [snappedLng, snappedLat] = snappedPt
+    const distM = haversineM(lat, lng, snappedLat, snappedLng)
 
+    if (distM > threshold) return { lat, lng, snapped: false }
+
+    return { lat: snappedLat, lng: snappedLng, snapped: true }
   } catch {
-    // Cualquier error (timeout, rate limit, etc.) → posición original
     return { lat, lng, snapped: false }
   }
 }

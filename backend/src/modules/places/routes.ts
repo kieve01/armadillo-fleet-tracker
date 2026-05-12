@@ -1,64 +1,80 @@
 import type { Express } from 'express'
 import {
-  SearchPlaceIndexForSuggestionsCommand,
-  SearchPlaceIndexForTextCommand,
-} from '@aws-sdk/client-location'
-import { locationClient, PLACE_INDEX } from '../../lib/locationClient'
+  AutocompleteCommand,
+  GeocodeCommand,
+} from '@aws-sdk/client-geo-places'
+import { geoPlacesClient } from '../../lib/locationClient'
 import { sendError } from '../../http/sendError'
+
+// Bounding box de Perú aproximada (lon_min, lat_min, lon_max, lat_max)
+const PERU_BBOX: [number, number, number, number] = [-81.3, -18.4, -68.6, -0.0]
+// Lima como punto de bias
+const LIMA_POSITION: [number, number] = [-77.0428, -12.0464]
 
 export function registerPlaceRoutes(app: Express): void {
 
   // Sugerencias de autocompletado filtradas a Perú
   app.get('/api/places/suggest', async (req, res) => {
     try {
-      if (!PLACE_INDEX) { res.status(400).json({ message: 'PLACE_INDEX not configured' }); return }
       const q = String(req.query.q ?? '').trim()
       if (q.length < 2) { res.json([]); return }
 
-      const result = await locationClient.send(
-        new SearchPlaceIndexForSuggestionsCommand({
-          IndexName:       PLACE_INDEX,
-          Text:            q,
-          MaxResults:      6,
-          FilterCountries: ['PER'],
-          BiasPosition:    [-77.0428, -12.0464], // Lima como centro de bias
-        }),
-      )
+      const result = await geoPlacesClient.send(new AutocompleteCommand({
+        QueryText:      q,
+        MaxResults:     6,
+        // Filtrar al bounding box de Perú
+        Filter: {
+          BoundingBox:  PERU_BBOX,
+          // Incluir categorías relevantes para fleet tracking: direcciones, lugares, vías
+          IncludeCountries: ['PER'],
+        },
+        BiasPosition:   LIMA_POSITION,
+        // Idioma en español
+        Language:       'es',
+      }))
 
       res.json(
-        (result.Results ?? [])
-          .filter(r => r.Text && r.PlaceId)
-          .map(r => ({ text: r.Text, placeId: r.PlaceId }))
+        (result.ResultItems ?? [])
+          .filter(r => r.Title)
+          .map(r => ({
+            text:    r.Title,
+            placeId: r.PlaceId ?? '',
+          }))
       )
     } catch (err) {
       sendError(res, err)
     }
   })
 
-  // Resolver texto o placeId a coordenadas
+  // Resolver texto a coordenadas (geocodificación)
   app.get('/api/places/resolve', async (req, res) => {
     try {
-      if (!PLACE_INDEX) { res.status(400).json({ message: 'PLACE_INDEX not configured' }); return }
       const q = String(req.query.q ?? '').trim()
       if (!q) { res.status(400).json({ message: 'q is required' }); return }
 
-      const result = await locationClient.send(
-        new SearchPlaceIndexForTextCommand({
-          IndexName:       PLACE_INDEX,
-          Text:            q,
-          MaxResults:      1,
-          FilterCountries: ['PER'],
-          BiasPosition:    [-77.0428, -12.0464],
-        }),
-      )
+      const result = await geoPlacesClient.send(new GeocodeCommand({
+        QueryText:    q,
+        MaxResults:   1,
+        // Bias hacia Lima / Perú
+        BiasPosition: LIMA_POSITION,
+        Filter: {
+          IncludeCountries: ['PER'],
+        },
+        Language: 'es',
+      }))
 
-      const place = result.Results?.[0]
-      if (!place?.Place?.Geometry?.Point) {
+      const item = result.ResultItems?.[0]
+      if (!item?.Position) {
         res.status(404).json({ message: 'Lugar no encontrado' }); return
       }
 
-      const [lng, lat] = place.Place.Geometry.Point
-      res.json({ label: place.Place.Label ?? q, lng, lat, point: [lng, lat] })
+      const [lng, lat] = item.Position
+      res.json({
+        label: item.Title ?? q,
+        lng,
+        lat,
+        point: [lng, lat] as [number, number],
+      })
     } catch (err) {
       sendError(res, err)
     }

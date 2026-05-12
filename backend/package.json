@@ -17,7 +17,8 @@
   "dependencies": {
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1018.0",
     "@aws-sdk/client-dynamodb": "^3.1018.0",
-    "@aws-sdk/client-location": "^3.1018.0",
+    "@aws-sdk/client-geo-routes": "^3.1018.0",
+    "@aws-sdk/client-geo-places": "^3.1018.0",
     "@aws-sdk/lib-dynamodb": "^3.1018.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.0",

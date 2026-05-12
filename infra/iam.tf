@@ -60,6 +60,32 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "*"
       },
       {
+        # AWS Location v2 — rutas (client-geo-routes)
+        Effect   = "Allow"
+        Action   = [
+          "geo-routes:CalculateRoutes",
+          "geo-routes:SnapToRoads",
+          "geo-routes:OptimizeWaypoints",
+          "geo-routes:CalculateIsolines",
+        ]
+        Resource = "*"
+      },
+      {
+        # AWS Location v2 — lugares (client-geo-places)
+        Effect   = "Allow"
+        Action   = [
+          "geo-places:Autocomplete",
+          "geo-places:Geocode",
+          "geo-places:ReverseGeocode",
+          "geo-places:GetPlace",
+          "geo-places:SearchNearby",
+          "geo-places:SearchText",
+          "geo-places:Suggest",
+        ]
+        Resource = "*"
+      },
+      {
+        # AWS Location v1 — ruta calculator legacy (puede quitarse cuando se valide v2)
         Effect   = "Allow"
         Action   = ["geo:CalculateRoute"]
         Resource = "arn:aws:geo:${var.region}:${data.aws_caller_identity.current.account_id}:route-calculator/*"

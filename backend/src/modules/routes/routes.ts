@@ -1,6 +1,8 @@
 import type { Express } from 'express'
-import { CalculateRouteCommand, type Leg } from '@aws-sdk/client-location'
-import { locationClient, ROUTE_CALCULATOR } from '../../lib/locationClient'
+import {
+  CalculateRoutesCommand,
+} from '@aws-sdk/client-geo-routes'
+import { geoRoutesClient } from '../../lib/locationClient'
 import {
   deleteRoute,
   getRoute,
@@ -10,6 +12,121 @@ import {
   type RouteTravelMode,
 } from '../../lib/routesStore'
 import { sendError } from '../../http/sendError'
+
+// ─── Helpers de modo de viaje ─────────────────────────────────────────────────
+type GeoRoutesMode = 'Car' | 'Truck' | 'Pedestrian'
+
+function toGeoRoutesMode(mode: RouteTravelMode): GeoRoutesMode {
+  if (mode === 'Walking') return 'Pedestrian'
+  if (mode === 'Truck')   return 'Truck'
+  return 'Car'
+}
+
+// ─── Extracción de geometría ──────────────────────────────────────────────────
+// La v2 con LegGeometryFormat='Simple' devuelve coordenadas en Geometry.LineString
+
+function extractGeometry(legs: any[]): [number, number][] {
+  if (!legs?.length) return []
+  const result: [number, number][] = []
+  for (const leg of legs) {
+    const coords: any[] | undefined = leg.Geometry?.LineString
+    if (!coords?.length) continue
+    for (let i = 0; i < coords.length; i++) {
+      const pt = coords[i]
+      if (!Array.isArray(pt) || pt.length < 2) continue
+      if (result.length && i === 0) {
+        const prev = result[result.length - 1]
+        if (prev[0] === pt[0] && prev[1] === pt[1]) continue
+      }
+      result.push([pt[0], pt[1]])
+    }
+  }
+  return result
+}
+
+function extractSnappedWaypoints(legs: any[], fallback: [number, number][]): [number, number][] {
+  if (!legs?.length) return fallback
+  const snapped: [number, number][] = []
+  for (const leg of legs) {
+    const first = leg.Geometry?.LineString?.[0]
+    if (Array.isArray(first) && first.length >= 2) {
+      snapped.push([first[0], first[1]])
+    }
+  }
+  const lastLeg  = legs[legs.length - 1]
+  const lastLine = lastLeg?.Geometry?.LineString
+  const lastPt   = lastLine?.[lastLine.length - 1]
+  if (Array.isArray(lastPt) && lastPt.length >= 2) {
+    snapped.push([lastPt[0], lastPt[1]])
+  }
+  return snapped.length >= 2 ? snapped : fallback
+}
+
+// ─── Llamada principal a la API v2 ────────────────────────────────────────────
+
+interface CalcInput {
+  waypoints:     [number, number][]
+  travelMode:    RouteTravelMode
+  avoidTolls?:   boolean
+  avoidFerries?: boolean
+  departureTime?: Date
+}
+
+interface CalcOutput {
+  geometry:         [number, number][]
+  snappedWaypoints: [number, number][]
+  distanceKm:       number | null
+  durationSeconds:  number | null
+}
+
+async function callGeoRoutes(input: CalcInput): Promise<CalcOutput> {
+  const mode = toGeoRoutesMode(input.travelMode)
+
+  const intermediary = input.waypoints.slice(1, -1).map(([lng, lat]) => ({
+    Position: [lng, lat] as [number, number],
+  }))
+
+  const avoidFerries = input.avoidFerries ?? true
+  const avoidTolls   = input.avoidTolls   ?? false
+
+  const resp = await geoRoutesClient.send(new CalculateRoutesCommand({
+    Origin:            input.waypoints[0],
+    Destination:       input.waypoints[input.waypoints.length - 1],
+    Waypoints:         intermediary.length ? intermediary : undefined,
+    TravelMode:        mode,
+    DepartureTime:     (input.departureTime ?? new Date()).toISOString(),
+    LegGeometryFormat: 'Simple',
+    MeasurementSystem: 'Metric',
+    // Opciones de evitación según modo
+    ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
+    ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
+  }))
+
+  const legs     = resp.Routes?.[0]?.Legs ?? []
+  const summary  = resp.Routes?.[0]?.Summary
+
+  return {
+    geometry:         extractGeometry(legs),
+    snappedWaypoints: extractSnappedWaypoints(legs, input.waypoints),
+    // v2: Distance en metros, Duration en segundos
+    distanceKm:      summary?.Distance != null ? summary.Distance / 1000 : null,
+    durationSeconds: summary?.Duration   ?? null,
+  }
+}
+
+function isNoRouteError(err: any): boolean {
+  const name    = String(err?.name    ?? '')
+  const message = String(err?.message ?? '')
+  return (
+    name.includes('RouteNotFoundException') ||
+    name.includes('ValidationException')    ||
+    message.includes('No route found')              ||
+    message.includes('cannot be reached')           ||
+    message.includes('Route cannot be calculated')
+  )
+}
+
+// ─── Express routes ───────────────────────────────────────────────────────────
 
 export function registerRouteRoutes(app: Express): void {
 
@@ -21,63 +138,26 @@ export function registerRouteRoutes(app: Express): void {
     }
   })
 
-  // ── Calcular ruta óptima (sin guardar) ────────────────────────────────────
-  // Usado por el calculador de ruta en frontend.
-  // Aplica: snap-to-road, evitar ferries/mar, tráfico histórico por hora.
+  // Calcular ruta óptima (sin guardar)
   app.post('/api/routes/calculate', async (req, res) => {
     try {
-      if (!ROUTE_CALCULATOR) {
-        res.status(400).json({ message: 'ROUTE_CALCULATOR is not configured' })
-        return
-      }
-
       const waypoints = parseWaypoints(req.body?.waypoints)
       if (waypoints.length < 2) {
         res.status(400).json({ message: 'At least 2 waypoints are required' })
         return
       }
 
-      const travelMode   = parseTravelMode(req.body?.travelMode) ?? 'Car'
-      const avoidTolls   = req.body?.avoidTolls === true
-      // DepartureTime activa el modelo de tráfico histórico de AWS Location.
-      // Si el cliente manda una hora de salida la usamos; si no, usamos ahora.
+      const travelMode    = parseTravelMode(req.body?.travelMode) ?? 'Car'
+      const avoidTolls    = req.body?.avoidTolls === true
       const departureTime = req.body?.departureTime
         ? new Date(req.body.departureTime)
         : new Date()
 
-      const departurePosition   = waypoints[0]
-      const destinationPosition = waypoints[waypoints.length - 1]
-      const waypointPositions   = waypoints.slice(1, -1)
-
-      let routeResponse
+      let result: CalcOutput
       try {
-        routeResponse = await locationClient.send(
-          new CalculateRouteCommand({
-            CalculatorName:     ROUTE_CALCULATOR,
-            DeparturePosition:  departurePosition,
-            DestinationPosition: destinationPosition,
-            WaypointPositions:  waypointPositions.length ? waypointPositions : undefined,
-            TravelMode:         travelMode,
-            DepartureTime:      departureTime,
-            IncludeLegGeometry: true,
-            // Evitar ferries y travesías marítimas — clave para Lima/Perú
-            CarModeOptions: travelMode === 'Car' || travelMode === 'Truck'
-              ? { AvoidFerries: true, AvoidTolls: avoidTolls }
-              : undefined,
-            TruckModeOptions: travelMode === 'Truck'
-              ? { AvoidFerries: true, AvoidTolls: avoidTolls }
-              : undefined,
-          }),
-        )
-      } catch (awsErr: any) {
-        // AWS devuelve estos errores cuando los puntos no tienen red vial alcanzable
-        const code = awsErr?.name ?? awsErr?.Code ?? ''
-        if (
-          code === 'RouteNotFoundException' ||
-          code === 'ValidationException' ||
-          awsErr?.message?.includes('No route found') ||
-          awsErr?.message?.includes('cannot be reached')
-        ) {
+        result = await callGeoRoutes({ waypoints, travelMode, avoidTolls, avoidFerries: true, departureTime })
+      } catch (awsErr) {
+        if (isNoRouteError(awsErr)) {
           res.status(422).json({
             message: 'No se encontró una ruta terrestre entre los puntos seleccionados. Verifica que no estén en el mar o en zonas sin vías.',
             code: 'NO_ROUTE',
@@ -87,32 +167,24 @@ export function registerRouteRoutes(app: Express): void {
         throw awsErr
       }
 
-      const geometry = getGeometryFromLegs(routeResponse.Legs, waypoints)
-
       res.json({
-        geometry,
-        distance:        routeResponse.Summary?.Distance ?? null,
-        durationSeconds: routeResponse.Summary?.DurationSeconds ?? null,
+        geometry:         result.geometry,
+        distance:         result.distanceKm,
+        durationSeconds:  result.durationSeconds,
         travelMode,
-        departureTime:   departureTime.toISOString(),
-        // Los puntos snapped son el primer punto de cada leg — más precisos que los enviados
-        snappedWaypoints: getSnappedWaypoints(routeResponse.Legs, waypoints),
+        departureTime:    departureTime.toISOString(),
+        snappedWaypoints: result.snappedWaypoints,
       })
     } catch (err) {
       sendError(res, err)
     }
   })
 
-  // ── Guardar ruta (trazar manual o guardar desde calculador) ───────────────
+  // Guardar ruta
   app.put('/api/routes/:routeId', async (req, res) => {
     try {
       const { routeId } = req.params
-      if (!ROUTE_CALCULATOR) {
-        res.status(400).json({ message: 'ROUTE_CALCULATOR is not configured' })
-        return
-      }
-
-      const waypoints = parseWaypoints(req.body?.waypoints)
+      const waypoints   = parseWaypoints(req.body?.waypoints)
       if (waypoints.length < 2) {
         res.status(400).json({ message: 'At least 2 waypoints are required' })
         return
@@ -124,37 +196,11 @@ export function registerRouteRoutes(app: Express): void {
         return
       }
 
-      const departurePosition   = waypoints[0]
-      const destinationPosition = waypoints[waypoints.length - 1]
-      const waypointPositions   = waypoints.slice(1, -1)
-
-      let routeResponse
+      let result: CalcOutput
       try {
-        routeResponse = await locationClient.send(
-          new CalculateRouteCommand({
-            CalculatorName:      ROUTE_CALCULATOR,
-            DeparturePosition:   departurePosition,
-            DestinationPosition: destinationPosition,
-            WaypointPositions:   waypointPositions.length ? waypointPositions : undefined,
-            TravelMode:          travelMode,
-            DepartureTime:       new Date(),
-            IncludeLegGeometry:  true,
-            CarModeOptions: travelMode === 'Car' || travelMode === 'Truck'
-              ? { AvoidFerries: true, AvoidTolls: false }
-              : undefined,
-            TruckModeOptions: travelMode === 'Truck'
-              ? { AvoidFerries: true, AvoidTolls: false }
-              : undefined,
-          }),
-        )
-      } catch (awsErr: any) {
-        const code = awsErr?.name ?? awsErr?.Code ?? ''
-        if (
-          code === 'RouteNotFoundException' ||
-          code === 'ValidationException' ||
-          awsErr?.message?.includes('No route found') ||
-          awsErr?.message?.includes('cannot be reached')
-        ) {
+        result = await callGeoRoutes({ waypoints, travelMode, avoidFerries: true, departureTime: new Date() })
+      } catch (awsErr) {
+        if (isNoRouteError(awsErr)) {
           res.status(422).json({
             message: 'No se encontró una ruta terrestre entre los puntos. Verifica que no estén en zonas sin vías o en el mar.',
             code: 'NO_ROUTE',
@@ -164,17 +210,16 @@ export function registerRouteRoutes(app: Express): void {
         throw awsErr
       }
 
-      const geometry = getGeometryFromLegs(routeResponse.Legs, waypoints)
       const now      = new Date().toISOString()
       const existing = await getRoute(routeId)
 
       const route: RouteRecord = {
         routeId,
         waypoints,
-        geometry,
+        geometry:        result.geometry,
         travelMode,
-        distance:        routeResponse.Summary?.Distance ?? null,
-        durationSeconds: routeResponse.Summary?.DurationSeconds ?? null,
+        distance:        result.distanceKm,
+        durationSeconds: result.durationSeconds,
         createdAt:       existing?.createdAt ?? now,
         updatedAt:       now,
       }
@@ -196,7 +241,7 @@ export function registerRouteRoutes(app: Express): void {
   })
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers de parseo ────────────────────────────────────────────────────────
 
 function parseWaypoints(value: unknown): [number, number][] {
   if (!Array.isArray(value)) return []
@@ -217,49 +262,4 @@ function parseTravelMode(value: unknown): RouteTravelMode | null {
   if (value === 'Car' || value === 'Truck' || value === 'Walking') return value
   if (value == null) return 'Car'
   return null
-}
-
-function getGeometryFromLegs(legs: Leg[] | undefined, fallback: [number, number][]): [number, number][] {
-  if (!legs?.length) return fallback
-  const result: [number, number][] = []
-  for (const leg of legs) {
-    const lineString = leg.Geometry?.LineString
-    if (!lineString?.length) continue
-    for (let i = 0; i < lineString.length; i++) {
-      const point = lineString[i]
-      if (
-        !Array.isArray(point) || point.length !== 2 ||
-        typeof point[0] !== 'number' || !Number.isFinite(point[0]) ||
-        typeof point[1] !== 'number' || !Number.isFinite(point[1])
-      ) continue
-      if (result.length && i === 0) {
-        const prev = result[result.length - 1]
-        if (prev[0] === point[0] && prev[1] === point[1]) continue
-      }
-      result.push([point[0], point[1]])
-    }
-  }
-  return result.length ? result : fallback
-}
-
-// Extrae los puntos snapped (inicio de cada leg) — son las coords reales en red vial
-function getSnappedWaypoints(legs: Leg[] | undefined, fallback: [number, number][]): [number, number][] {
-  if (!legs?.length) return fallback
-  const snapped: [number, number][] = []
-  for (const leg of legs) {
-    const first = leg.Geometry?.LineString?.[0]
-    if (Array.isArray(first) && first.length === 2 &&
-        typeof first[0] === 'number' && typeof first[1] === 'number') {
-      snapped.push([first[0], first[1]])
-    }
-  }
-  // Agregar el último punto del último leg
-  const lastLeg  = legs[legs.length - 1]
-  const lastLine = lastLeg?.Geometry?.LineString
-  const lastPt   = lastLine?.[lastLine.length - 1]
-  if (Array.isArray(lastPt) && lastPt.length === 2 &&
-      typeof lastPt[0] === 'number' && typeof lastPt[1] === 'number') {
-    snapped.push([lastPt[0], lastPt[1]])
-  }
-  return snapped.length >= 2 ? snapped : fallback
 }
