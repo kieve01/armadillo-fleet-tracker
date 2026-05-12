@@ -252,7 +252,7 @@ export function registerRouteRoutes(app: Express): void {
         LegGeometryFormat: 'Simple',
         MaxAlternatives:   2,
         SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'DynamicSpeed', 'SpeedLimit'] as any,
-        CarOptions: { AvoidFerries: true },
+        
       }))
       // Devolver estructura resumida para diagnóstico
       res.json({

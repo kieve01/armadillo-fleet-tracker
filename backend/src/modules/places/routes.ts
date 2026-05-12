@@ -107,7 +107,7 @@ export function registerPlaceRoutes(app: Express): void {
       }
 
       const [lng, lat] = result.Position
-      const label = buildAddressLabel({ Address: result.Address, Title: result.Title, Label: result.Label })
+      const label = buildAddressLabel({ Address: result.Address, Title: result.Title })
       res.json({ label, lng, lat, point: [lng, lat] as [number, number] })
     } catch (err) {
       sendError(res, err)
