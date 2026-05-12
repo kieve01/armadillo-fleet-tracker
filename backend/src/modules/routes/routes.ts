@@ -124,7 +124,8 @@ async function callGeoRoutes(input: CalcInput): Promise<RouteResult[]> {
     LegGeometryFormat: 'Simple',
     ...(extraAlts > 0 ? { MaxAlternatives: extraAlts } : {}),
     // Valores válidos del SDK para SpanAdditionalFeatures
-    SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit'] as any,
+    SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit', 'Incidents', 'DynamicSpeed'] as any,
+    Traffic: { Usage: 'UseTrafficData' } as any,
     ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
     ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: avoidFerries, AvoidTolls: avoidTolls } } : {}),
   }))
@@ -221,7 +222,8 @@ export function registerRouteRoutes(app: Express): void {
         DepartureTime:     new Date().toISOString(),
         LegGeometryFormat: 'Simple',
         MaxAlternatives:   2,
-        SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit'] as any,
+        SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit', 'Incidents', 'DynamicSpeed'] as any,
+        Traffic: { Usage: 'UseTrafficData' } as any,
       }))
       res.json({
         routeCount: (resp.Routes ?? []).length,

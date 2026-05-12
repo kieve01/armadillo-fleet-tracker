@@ -474,8 +474,8 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
                   {hasTrafficDelay((activeAlt as any).trafficSpans) && (
                     <div style={{
                       marginTop: 8, padding: '5px 8px', borderRadius: 6,
-                      background: '#fff3e0', border: '1px solid #ffcc02',
-                      fontSize: 11, color: '#e65100',
+                      background: token.colorWarningBg, border: `1px solid ${token.colorWarningBorder}`,
+                      fontSize: 11, color: token.colorWarning,
                       display: 'flex', alignItems: 'center', gap: 5,
                     }}>
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f44336', flexShrink: 0 }} />
