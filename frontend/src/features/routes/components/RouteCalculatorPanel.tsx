@@ -73,11 +73,6 @@ function saveToHistory(item: PlaceSuggestion) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify([item, ...prev].slice(0, MAX_HISTORY)))
 }
 
-function removeFromHistory(text: string) {
-  const prev = loadHistory().filter(h => h.text !== text)
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(prev))
-}
-
 // ─── PlaceField ───────────────────────────────────────────────────────────────
 function PlaceField({
   dotColor, placeholder, value, onChange, onSelect,
