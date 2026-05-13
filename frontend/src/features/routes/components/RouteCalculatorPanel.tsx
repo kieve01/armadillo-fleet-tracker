@@ -73,7 +73,6 @@ function saveToHistory(item: PlaceSuggestion) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify([item, ...prev].slice(0, MAX_HISTORY)))
 }
 
-function removeFromHistory(text: string) {
   const prev = loadHistory().filter(h => h.text !== text)
   localStorage.setItem(HISTORY_KEY, JSON.stringify(prev))
 }
@@ -230,7 +229,6 @@ function PlaceField({
                 <button
                   onMouseDown={e => {
                     e.stopPropagation()
-                    removeFromHistory(s.text)
                     setHistory(loadHistory())
                     if (loadHistory().length === 0) setOpen(false)
                   }}
