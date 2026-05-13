@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Typography, theme } from 'antd'
 import {
-  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined, HistoryOutlined, DeleteOutlined,
+  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined, HistoryOutlined,
   SwapOutlined, SaveOutlined, LoadingOutlined, RetweetOutlined,
 } from '@ant-design/icons'
 import { useRoutesStore } from '../routesStore'
@@ -207,7 +207,7 @@ function PlaceField({
               </span>
             </div>
           )}
-          {(suggestions.length > 0 ? suggestions : (!value ? history : [])).map((s, i, arr) => (
+          {(suggestions.length > 0 ? suggestions : (!value ? history : [])).map((s, i) => (
             <div key={i} onMouseDown={() => handleSelect(s)}
               style={{
                 padding: '9px 12px', fontSize: 13, cursor: 'pointer',
@@ -221,8 +221,25 @@ function PlaceField({
               onMouseEnter={e => (e.currentTarget.style.background = token.colorBgTextHover)}
               onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
             >
-              <EnvironmentOutlined style={{ fontSize: 12, color: '#ea4335', flexShrink: 0, marginTop: 2 }} />
-              <span>{s.text}</span>
+              {suggestions.length === 0 && !value
+                ? <HistoryOutlined style={{ fontSize: 11, color: token.colorTextTertiary, flexShrink: 0, marginTop: 2 }} />
+                : <EnvironmentOutlined style={{ fontSize: 12, color: '#ea4335', flexShrink: 0, marginTop: 2 }} />
+              }
+              <span style={{ flex: 1 }}>{s.text}</span>
+              {suggestions.length === 0 && !value && (
+                <button
+                  onMouseDown={e => {
+                    e.stopPropagation()
+                    removeFromHistory(s.text)
+                    setHistory(loadHistory())
+                    if (loadHistory().length === 0) setOpen(false)
+                  }}
+                  style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px', color: token.colorTextTertiary, flexShrink: 0 }}
+                  title="Eliminar del historial"
+                >
+                  <DeleteOutlined style={{ fontSize: 10 }} />
+                </button>
+              )}
             </div>
           ))}
         </div>
