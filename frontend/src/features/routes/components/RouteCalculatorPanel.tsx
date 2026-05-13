@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Typography, theme } from 'antd'
 import {
-  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined, HistoryOutlined,
+  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined, HistoryOutlined, DeleteOutlined,
   SwapOutlined, SaveOutlined, LoadingOutlined, RetweetOutlined,
 } from '@ant-design/icons'
 import { useRoutesStore } from '../routesStore'
