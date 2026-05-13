@@ -10,19 +10,16 @@ import { sendError } from '../../http/sendError'
 const LIMA_POSITION: [number, number] = [-77.0428, -12.0464]
 const LIMA_BBOX: [number, number, number, number] = [-77.22, -12.22, -76.82, -11.82]
 
-// ─── Google Places API ────────────────────────────────────────────────────────
-
-const GOOGLE_AUTOCOMPLETE_URL  = 'https://places.googleapis.com/v1/places:autocomplete'
-const GOOGLE_GEOCODE_URL       = 'https://maps.googleapis.com/maps/api/geocode/json'
-const GOOGLE_REVERSE_URL       = 'https://maps.googleapis.com/maps/api/geocode/json'
+// ─── Google Places ────────────────────────────────────────────────────────────
 
 async function googleSuggest(q: string): Promise<{ text: string; placeId: string; position?: [number, number] }[]> {
-  const resp = await fetch(GOOGLE_AUTOCOMPLETE_URL, {
+  const resp = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
     method: 'POST',
     headers: {
       'Content-Type':     'application/json',
       'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
-      'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
+      // Incluir structuredFormat para obtener texto principal y secundario
+      'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat',
     },
     body: JSON.stringify({
       input:               q,
@@ -37,7 +34,7 @@ async function googleSuggest(q: string): Promise<{ text: string; placeId: string
     .filter((s: any) => s.placePrediction)
     .map((s: any) => ({
       text:    s.placePrediction.text?.text ?? '',
-      placeId: s.placePrediction.placeId ?? '',
+      placeId: s.placePrediction.placeId   ?? '',
     }))
 }
 
@@ -52,12 +49,14 @@ async function googleResolveId(placeId: string): Promise<{ label: string; point:
   if (!resp.ok) return null
   const data: any = await resp.json()
   if (!data.location) return null
-  const label = data.formattedAddress ?? data.displayName?.text ?? placeId
-  return { label, point: [data.location.longitude, data.location.latitude] }
+  return {
+    label: data.formattedAddress ?? data.displayName?.text ?? placeId,
+    point: [data.location.longitude, data.location.latitude],
+  }
 }
 
 async function googleGeocode(q: string): Promise<{ label: string; lng: number; lat: number; point: [number, number] } | null> {
-  const url = `${GOOGLE_GEOCODE_URL}?address=${encodeURIComponent(q)}&key=${GOOGLE_MAPS_API_KEY}&language=es&region=PE&bounds=-12.22,-77.22|-11.82,-76.82`
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${GOOGLE_MAPS_API_KEY}&language=es&region=PE&bounds=-12.22,-77.22|-11.82,-76.82`
   const resp = await fetch(url)
   if (!resp.ok) return null
   const data: any = await resp.json()
@@ -68,26 +67,30 @@ async function googleGeocode(q: string): Promise<{ label: string; lng: number; l
 }
 
 async function googleReverseGeocode(lat: number, lng: number): Promise<{ label: string; point: [number, number] } | null> {
-  const url = `${GOOGLE_REVERSE_URL}?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}&language=es`
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}&language=es`
   const resp = await fetch(url)
   if (!resp.ok) return null
   const data: any = await resp.json()
-  const result = data.results?.[0]
-  if (!result) return null
-  return { label: result.formatted_address, point: [lng, lat] }
+  // Buscar el resultado más específico (tipo street_address o route)
+  const results: any[] = data.results ?? []
+  const best = results.find(r => r.types?.includes('street_address'))
+    ?? results.find(r => r.types?.includes('route'))
+    ?? results[0]
+  if (!best) return null
+  return { label: best.formatted_address, point: [lng, lat] }
 }
 
-// ─── AWS Places API ───────────────────────────────────────────────────────────
+// ─── AWS Places (fallback) ────────────────────────────────────────────────────
 
 function buildLabel(item: any): string {
   const addr = item.Address ?? {}
   const parts: string[] = []
-  if (addr.Street)          parts.push(addr.Street)
-  else if (item.Title)      parts.push(item.Title)
-  if (addr.District)        parts.push(addr.District)
-  else if (addr.Locality)   parts.push(addr.Locality)
+  if (addr.Street)        parts.push(addr.Street)
+  else if (item.Title)    parts.push(item.Title)
+  if (addr.District)      parts.push(addr.District)
+  else if (addr.Locality) parts.push(addr.Locality)
   if (addr.Municipality && addr.Municipality !== addr.Locality) parts.push(addr.Municipality)
-  if (addr.PostalCode)      parts.push(addr.PostalCode)
+  if (addr.PostalCode)    parts.push(addr.PostalCode)
   return parts.filter(Boolean).join(', ') || item.Title || 'Lugar desconocido'
 }
 
@@ -106,7 +109,6 @@ export function registerPlaceRoutes(app: Express): void {
         return
       }
 
-      // AWS fallback
       const result = await geoPlacesClient.send(new SearchTextCommand({
         QueryText: q, MaxResults: 8, BiasPosition: LIMA_POSITION,
         Filter: { IncludeCountries: ['PER'], BoundingBox: LIMA_BBOX }, Language: 'es',
@@ -141,7 +143,6 @@ export function registerPlaceRoutes(app: Express): void {
         return
       }
 
-      // AWS fallback
       const result = await geoPlacesClient.send(new GetPlaceCommand({ PlaceId: placeId, Language: 'es' }))
       if (!result.Position) { res.status(404).json({ message: 'Lugar no encontrado' }); return }
       const [lng, lat] = result.Position
@@ -154,26 +155,28 @@ export function registerPlaceRoutes(app: Express): void {
       const q = String(req.query.q ?? '').trim()
       if (!q) { res.status(400).json({ message: 'q is required' }); return }
 
-      // Coordenadas desde click en mapa — igual para ambos proveedores
+      // Coordenadas desde click en mapa → reverse geocode
       const coordMatch = q.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/)
       if (coordMatch) {
         const lat = parseFloat(coordMatch[1])
         const lng = parseFloat(coordMatch[2])
         if (USE_GOOGLE) {
           const result = await googleReverseGeocode(lat, lng)
-          if (result) { res.json({ label: result.label, lng, lat, point: [lng, lat] }); return }
-        } else {
-          try {
-            const rev = await geoPlacesClient.send(new ReverseGeocodeCommand({
-              QueryPosition: [lng, lat], MaxResults: 1, Language: 'es',
-            }))
-            const item = rev.ResultItems?.[0]
-            if (item?.Position) {
-              const [rLng, rLat] = item.Position
-              res.json({ label: buildLabel(item), lng: rLng, lat: rLat, point: [rLng, rLat] }); return
-            }
-          } catch {}
+          // Usar label de Google o fallback a coordenadas limpias
+          const label = result?.label ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+          res.json({ label, lng, lat, point: [lng, lat] })
+          return
         }
+        try {
+          const rev = await geoPlacesClient.send(new ReverseGeocodeCommand({
+            QueryPosition: [lng, lat], MaxResults: 1, Language: 'es',
+          }))
+          const item = rev.ResultItems?.[0]
+          if (item?.Position) {
+            const [rLng, rLat] = item.Position
+            res.json({ label: buildLabel(item), lng: rLng, lat: rLat, point: [rLng, rLat] }); return
+          }
+        } catch {}
         res.json({ label: `${lat.toFixed(5)}, ${lng.toFixed(5)}`, lng, lat, point: [lng, lat] })
         return
       }
@@ -185,7 +188,6 @@ export function registerPlaceRoutes(app: Express): void {
         return
       }
 
-      // AWS fallback
       const result = await geoPlacesClient.send(new SearchTextCommand({
         QueryText: q, MaxResults: 1, BiasPosition: LIMA_POSITION,
         Filter: { IncludeCountries: ['PER'], BoundingBox: LIMA_BBOX }, Language: 'es',
@@ -209,7 +211,9 @@ export function registerPlaceRoutes(app: Express): void {
       const q = String(req.query.q ?? 'Jr Ancash 2800').trim()
       if (USE_GOOGLE) {
         const suggestions = await googleSuggest(q)
-        res.json({ provider: 'google', suggestions })
+        // También testear reverse geocode
+        const reverse = await googleReverseGeocode(-12.0464, -77.0428)
+        res.json({ provider: 'google', suggestions, reverseTest: reverse })
         return
       }
       const result = await geoPlacesClient.send(new SearchTextCommand({
