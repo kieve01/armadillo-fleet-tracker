@@ -23,22 +23,27 @@ export interface TrafficSpan {
 }
 
 export interface RouteAlternative {
-  geometry:         [number, number][]
-  distance:         number | null
-  durationSeconds:  number | null
-  trafficSpans:     TrafficSpan[]
-  snappedWaypoints: [number, number][]
+  geometry:               [number, number][]
+  distance:               number | null
+  durationSeconds:        number | null
+  staticDurationSeconds:  number | null
+  trafficSpans:           TrafficSpan[]
+  snappedWaypoints:       [number, number][]
+  description?:           string
 }
 
 export interface CalculateRouteResult {
-  geometry:         [number, number][]
-  distance:         number | null
-  durationSeconds:  number | null
-  trafficSpans:     TrafficSpan[]
-  travelMode:       RouteTravelMode
-  departureTime:    string
-  snappedWaypoints: [number, number][]
-  alternatives:     RouteAlternative[]
+  geometry:               [number, number][]
+  distance:               number | null
+  durationSeconds:        number | null
+  staticDurationSeconds:  number | null
+  trafficSpans:           TrafficSpan[]
+  travelMode:             RouteTravelMode
+  departureTime:          string
+  snappedWaypoints:       [number, number][]
+  alternatives:           RouteAlternative[]
+  description?:           string
+  provider?:              string
 }
 
 function toError(error: unknown): Error {

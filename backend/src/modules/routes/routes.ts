@@ -10,17 +10,18 @@ import { sendError } from '../../http/sendError'
 export interface TrafficSpan {
   startIndex: number
   endIndex:   number
-  congestion: number   // 0=verde 0.5=naranja 1=rojo
+  congestion: number
   speedKmh:   number | null
 }
 
 interface RouteResult {
-  geometry:         [number, number][]
-  snappedWaypoints: [number, number][]
-  distanceKm:       number | null
-  durationSeconds:  number | null
-  trafficSpans:     TrafficSpan[]
-  description?:     string
+  geometry:               [number, number][]
+  snappedWaypoints:       [number, number][]
+  distanceKm:             number | null
+  durationSeconds:        number | null
+  staticDurationSeconds:  number | null   // sin tráfico — para mostrar el delta
+  trafficSpans:           TrafficSpan[]
+  description?:           string
 }
 
 interface CalcInput {
@@ -76,10 +77,18 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   const resp = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
     method:  'POST',
     headers: {
-      'Content-Type':     'application/json',
-      'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
-      // Incluir TODOS los campos necesarios — sin uno solo el campo no llega
-      'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters,routes.description,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals,routes.travelAdvisory.tollInfo',
+      'Content-Type':   'application/json',
+      'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY!,
+      // staticDuration = tiempo sin tráfico; duration = con tráfico
+      // speedReadingIntervals = segmentos coloreados (solo si hay variación)
+      'X-Goog-FieldMask': [
+        'routes.duration',
+        'routes.staticDuration',
+        'routes.distanceMeters',
+        'routes.description',
+        'routes.polyline.encodedPolyline',
+        'routes.travelAdvisory.speedReadingIntervals',
+      ].join(','),
     },
     body: JSON.stringify(body),
   })
@@ -94,10 +103,12 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   if (!routes.length) return []
 
   return routes.map((route: any) => {
-    const durationSecs = route.duration
-      ? parseInt(route.duration.replace('s', ''), 10)
-      : null
-    const distanceKm = route.distanceMeters ? route.distanceMeters / 1000 : null
+    const parseSecs = (s: string | undefined) =>
+      s ? parseInt(s.replace('s', ''), 10) : null
+
+    const durationSecs       = parseSecs(route.duration)
+    const staticDurationSecs = parseSecs(route.staticDuration)
+    const distanceKm         = route.distanceMeters ? route.distanceMeters / 1000 : null
 
     const geometry: [number, number][] = route.polyline?.encodedPolyline
       ? decodePolyline(route.polyline.encodedPolyline)
@@ -107,7 +118,8 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
       ? [geometry[0], geometry[geometry.length - 1]]
       : [origin, destination]
 
-    // speedReadingIntervals mapean directamente a índices de la polyline decodificada
+    // speedReadingIntervals: solo presente cuando hay segmentos SLOW o TRAFFIC_JAM
+    // Si todo está NORMAL → array vacío (pero duration > staticDuration igual)
     const trafficSpans: TrafficSpan[] = []
     const intervals: any[] = route.travelAdvisory?.speedReadingIntervals ?? []
     for (const interval of intervals) {
@@ -123,7 +135,15 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
       })
     }
 
-    return { geometry, snappedWaypoints, distanceKm, durationSeconds: durationSecs, trafficSpans, description: route.description }
+    return {
+      geometry,
+      snappedWaypoints,
+      distanceKm,
+      durationSeconds:       durationSecs,
+      staticDurationSeconds: staticDurationSecs,
+      trafficSpans,
+      description:           route.description,
+    }
   })
 }
 
@@ -182,14 +202,14 @@ async function callAWSRoutes(input: CalcInput): Promise<RouteResult[]> {
     ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: true, AvoidTolls: input.avoidTolls ?? false } } : {}),
   }))
   return (resp.Routes ?? []).map((route: any) => {
-    const legs     = route.Legs ?? []
-    const geometry = extractGeometry(legs)
+    const legs = route.Legs ?? []
     return {
-      geometry,
-      snappedWaypoints: extractSnappedWaypoints(legs, input.waypoints),
-      distanceKm:       route.Summary?.Distance != null ? route.Summary.Distance / 1000 : null,
-      durationSeconds:  route.Summary?.Duration ?? null,
-      trafficSpans:     [],
+      geometry:               extractGeometry(legs),
+      snappedWaypoints:       extractSnappedWaypoints(legs, input.waypoints),
+      distanceKm:             route.Summary?.Distance != null ? route.Summary.Distance / 1000 : null,
+      durationSeconds:        route.Summary?.Duration ?? null,
+      staticDurationSeconds:  null,
+      trafficSpans:           [],
     }
   })
 }
@@ -235,28 +255,29 @@ export function registerRouteRoutes(app: Express): void {
 
       const [main, ...alts] = results
       res.json({
-        geometry:         main.geometry,
-        distance:         main.distanceKm,
-        durationSeconds:  main.durationSeconds,
-        trafficSpans:     main.trafficSpans,
-        description:      main.description,
+        geometry:               main.geometry,
+        distance:               main.distanceKm,
+        durationSeconds:        main.durationSeconds,
+        staticDurationSeconds:  main.staticDurationSeconds,
+        trafficSpans:           main.trafficSpans,
+        description:            main.description,
         travelMode,
-        departureTime:    new Date().toISOString(),
-        snappedWaypoints: main.snappedWaypoints,
-        provider:         USE_GOOGLE ? 'google' : 'aws',
+        departureTime:          new Date().toISOString(),
+        snappedWaypoints:       main.snappedWaypoints,
+        provider:               USE_GOOGLE ? 'google' : 'aws',
         alternatives: alts.map(a => ({
-          geometry:         a.geometry,
-          distance:         a.distanceKm,
-          durationSeconds:  a.durationSeconds,
-          trafficSpans:     a.trafficSpans,
-          description:      a.description,
-          snappedWaypoints: a.snappedWaypoints,
+          geometry:               a.geometry,
+          distance:               a.distanceKm,
+          durationSeconds:        a.durationSeconds,
+          staticDurationSeconds:  a.staticDurationSeconds,
+          trafficSpans:           a.trafficSpans,
+          description:            a.description,
+          snappedWaypoints:       a.snappedWaypoints,
         })),
       })
     } catch (err) { sendError(res, err) }
   })
 
-  // Debug con respuesta cruda para verificar spans
   app.post('/api/routes/debug', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
@@ -268,9 +289,8 @@ export function registerRouteRoutes(app: Express): void {
         return
       }
 
-      const origin      = waypoints[0]
-      const destination = waypoints[1]
-      const googleResp  = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+      const origin = waypoints[0], destination = waypoints[1]
+      const googleResp = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
         method: 'POST',
         headers: {
           'Content-Type':     'application/json',
@@ -287,21 +307,30 @@ export function registerRouteRoutes(app: Express): void {
         }),
       })
       const data: any = await googleResp.json()
+      const parseSecs = (s: string | undefined) => s ? parseInt(s.replace('s', ''), 10) : null
+
       res.json({
         provider:   'google',
         httpStatus: googleResp.status,
-        routeCount: (data.routes ?? []).length,
         error:      data.error ?? null,
-        routes: (data.routes ?? []).map((r: any, i: number) => ({
-          index:           i,
-          durationMin:     r.duration ? Math.round(parseInt(r.duration) / 60) : null,
-          staticDurationMin: r.staticDuration ? Math.round(parseInt(r.staticDuration) / 60) : null,
-          distanceKm:      r.distanceMeters ? r.distanceMeters / 1000 : null,
-          description:     r.description,
-          spanCount:       (r.travelAdvisory?.speedReadingIntervals ?? []).length,
-          sampleSpans:     (r.travelAdvisory?.speedReadingIntervals ?? []).slice(0, 5),
-          polylinePoints:  r.polyline?.encodedPolyline ? decodePolyline(r.polyline.encodedPolyline).length : 0,
-        })),
+        routeCount: (data.routes ?? []).length,
+        routes: (data.routes ?? []).map((r: any, i: number) => {
+          const dur    = parseSecs(r.duration)
+          const static_ = parseSecs(r.staticDuration)
+          const delta  = dur != null && static_ != null ? dur - static_ : null
+          return {
+            index:             i,
+            durationMin:       dur    ? Math.round(dur    / 60) : null,
+            staticDurationMin: static_ ? Math.round(static_ / 60) : null,
+            trafficDelayMin:   delta  ? Math.round(delta  / 60) : 0,
+            trafficWorking:    delta != null && delta > 0,
+            distanceKm:        r.distanceMeters ? r.distanceMeters / 1000 : null,
+            description:       r.description,
+            spanCount:         (r.travelAdvisory?.speedReadingIntervals ?? []).length,
+            sampleSpans:       (r.travelAdvisory?.speedReadingIntervals ?? []).slice(0, 3),
+            polylinePoints:    r.polyline?.encodedPolyline ? decodePolyline(r.polyline.encodedPolyline).length : 0,
+          }
+        }),
       })
     } catch (err) { sendError(res, err) }
   })
@@ -325,13 +354,8 @@ export function registerRouteRoutes(app: Express): void {
 
       const main = results[0], now = new Date().toISOString()
       const existing = await getRoute(routeId)
-      const route: RouteRecord = {
-        routeId, waypoints, geometry: main.geometry, travelMode,
-        distance: main.distanceKm, durationSeconds: main.durationSeconds,
-        createdAt: existing?.createdAt ?? now, updatedAt: now,
-      }
-      await putRoute(route)
-      res.json(route)
+      await putRoute({ routeId, waypoints, geometry: main.geometry, travelMode, distance: main.distanceKm, durationSeconds: main.durationSeconds, createdAt: existing?.createdAt ?? now, updatedAt: now })
+      res.json({ routeId, geometry: main.geometry, travelMode, distance: main.distanceKm, durationSeconds: main.durationSeconds })
     } catch (err) { sendError(res, err) }
   })
 

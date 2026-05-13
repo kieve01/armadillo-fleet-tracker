@@ -13,9 +13,7 @@ import type { TrafficSpan } from '../routesService'
 
 const BASE = import.meta.env.VITE_API_BASE_URL as string
 
-// Cache de placeId → resolved — evita llamadas duplicadas a Place Details ($17/1000)
 const placeCache = new Map<string, { label: string; point: [number, number] }>()
-
 
 const SIDEBAR_EXPANDED  = 280
 const SIDEBAR_COLLAPSED = 56
@@ -110,14 +108,15 @@ function PlaceField({
   const handleSelect = async (item: PlaceSuggestion) => {
     onChange(item.text); setOpen(false); setSuggestions([])
     saveToHistory(item); setHistory(loadHistory())
+    // Si la sugerencia ya trae coordenadas (desde SearchText), usarlas directamente
     if (item.position) {
       const [lng, lat] = item.position
       onSelect({ label: item.text, lng, lat, point: item.position })
       return
     }
+    // Fallback: resolver por placeId o texto
     let resolved: ResolvedPlace | null = null
     if (item.placeId) {
-      // Cache para evitar llamadas duplicadas a Place Details ($17/1000)
       if (placeCache.has(item.placeId)) {
         const cached = placeCache.get(item.placeId)!
         onChange(cached.label); onSelect({ label: cached.label, lng: cached.point[0], lat: cached.point[1], point: cached.point })
@@ -268,9 +267,10 @@ function PlaceField({
 
 // ─── Tarjeta de alternativa ───────────────────────────────────────────────────
 function AltCard({
-  index, distance, durationSeconds, trafficSpans, selected, onSelect,
+  index, distance, durationSeconds, staticDurationSeconds, trafficSpans, selected, onSelect,
 }: {
   index: number; distance: number | null; durationSeconds: number | null
+  staticDurationSeconds?: number | null
   trafficSpans?: TrafficSpan[]; selected: boolean; onSelect: () => void
 }) {
   const { token } = theme.useToken()
@@ -301,6 +301,11 @@ function AltCard({
       <div style={{ fontSize: 18, fontWeight: 700, color: token.colorText, lineHeight: 1 }}>
         {fmtDur(durationSeconds)}
       </div>
+      {staticDurationSeconds != null && durationSeconds != null && durationSeconds > staticDurationSeconds && (
+        <div style={{ fontSize: 10, color: '#ff9800', marginTop: 1 }}>
+          +{fmtDur(durationSeconds - staticDurationSeconds)} tráfico
+        </div>
+      )}
       <div style={{ fontSize: 11, color: token.colorTextTertiary, marginTop: 3 }}>
         {fmtDist(distance)}
       </div>
@@ -508,6 +513,7 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
                 {allAlts.map((alt, i) => (
                   <AltCard key={i} index={i}
                     distance={alt.distance} durationSeconds={alt.durationSeconds}
+                    staticDurationSeconds={(alt as any).staticDurationSeconds}
                     trafficSpans={(alt as any).trafficSpans}
                     selected={selectedAltIndex === i} onSelect={() => selectAltIndex(i)} />
                 ))}
