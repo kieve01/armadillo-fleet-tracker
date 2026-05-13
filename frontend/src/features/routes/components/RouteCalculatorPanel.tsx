@@ -131,7 +131,7 @@ function PlaceField({
             onFocus={() => suggestions.length > 0 && setOpen(true)}
             placeholder={placeholder} disabled={disabled}
             style={{
-              width: '100%', padding: '8px 34px 8px 10px',
+              width: '100%', padding: '8px 60px 8px 10px',
               border: `1.5px solid ${borderColor}`, borderRadius: token.borderRadius,
               fontSize: 13, background: token.colorBgContainer,
               color: token.colorText, outline: 'none',
