@@ -23,7 +23,7 @@ export const useUIStore = create<UIState>()(
     (set) => ({
       sidebarCollapsed: false,
       trafficEnabled:   false,
-      mapStyle: 'Standard' as MapStyle,
+      mapStyle: 'Hybrid' as MapStyle,
       themeMode:        'light'  as ThemeMode,
       darkMap:          false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
