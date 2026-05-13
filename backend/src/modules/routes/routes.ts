@@ -62,6 +62,7 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
     routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
     computeAlternativeRoutes: maxAlts > 0,
     extraComputations:       ['TRAFFIC_ON_POLYLINE'],
+    polylineQuality:         'HIGH_QUALITY',
     routeModifiers: {
       avoidTolls:   input.avoidTolls   ?? false,
       avoidFerries: input.avoidFerries ?? false,
@@ -304,6 +305,7 @@ export function registerRouteRoutes(app: Express): void {
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
+    polylineQuality:         'HIGH_QUALITY',
         }),
       })
       const data: any = await googleResp.json()
