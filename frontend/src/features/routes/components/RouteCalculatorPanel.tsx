@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Typography, theme } from 'antd'
 import {
-  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined,
+  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined, HistoryOutlined, DeleteOutlined,
   SwapOutlined, SaveOutlined, LoadingOutlined, RetweetOutlined,
 } from '@ant-design/icons'
 import { useRoutesStore } from '../routesStore'
@@ -59,6 +59,25 @@ const arrivalStr = (durationSeconds: number | null) => {
 const hasTrafficDelay = (spans?: TrafficSpan[]) =>
   !!spans?.some(s => s.congestion > 0.3)
 
+
+const HISTORY_KEY = 'armadillo_place_history'
+const MAX_HISTORY = 5
+
+function loadHistory(): PlaceSuggestion[] {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]') }
+  catch { return [] }
+}
+
+function saveToHistory(item: PlaceSuggestion) {
+  const prev = loadHistory().filter(h => h.text !== item.text)
+  localStorage.setItem(HISTORY_KEY, JSON.stringify([item, ...prev].slice(0, MAX_HISTORY)))
+}
+
+function removeFromHistory(text: string) {
+  const prev = loadHistory().filter(h => h.text !== text)
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(prev))
+}
+
 // ─── PlaceField ───────────────────────────────────────────────────────────────
 function PlaceField({
   dotColor, placeholder, value, onChange, onSelect,
@@ -73,6 +92,7 @@ function PlaceField({
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([])
   const [open,        setOpen]        = useState(false)
   const [loading,     setLoading]     = useState(false)
+  const [history,     setHistory]     = useState<PlaceSuggestion[]>(() => loadHistory())
   const debounceRef = useRef<number | null>(null)
   const wrapRef     = useRef<HTMLDivElement>(null)
 
@@ -89,6 +109,7 @@ function PlaceField({
 
   const handleSelect = async (item: PlaceSuggestion) => {
     onChange(item.text); setOpen(false); setSuggestions([])
+    saveToHistory(item); setHistory(loadHistory())
     // Si la sugerencia ya trae coordenadas (desde SearchText), usarlas directamente
     if (item.position) {
       const [lng, lat] = item.position
@@ -128,7 +149,7 @@ function PlaceField({
         <div style={{ flex: 1, position: 'relative' }}>
           <input
             value={value} onChange={e => handleChange(e.target.value)}
-            onFocus={() => suggestions.length > 0 && setOpen(true)}
+            onFocus={() => { if (suggestions.length > 0) setOpen(true); else if (!value && history.length > 0) setOpen(true) }}
             placeholder={placeholder} disabled={disabled}
             style={{
               width: '100%', padding: '8px 60px 8px 10px',
@@ -168,7 +189,7 @@ function PlaceField({
       </div>
 
       {/* Dropdown de sugerencias */}
-      {open && suggestions.length > 0 && (
+      {open && (suggestions.length > 0 || (!value && history.length > 0)) && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 4px)', left: 15, right: 0,
           background: token.colorBgElevated,
@@ -178,7 +199,15 @@ function PlaceField({
           boxShadow: token.boxShadowSecondary,
           overflow: 'hidden',
         }}>
-          {suggestions.map((s, i) => (
+          {/* Header cuando es historial */}
+          {!value && suggestions.length === 0 && history.length > 0 && (
+            <div style={{ padding: '6px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <span style={{ fontSize: 10.5, fontWeight: 600, color: 'var(--color-text-tertiary, #8c8c8c)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <HistoryOutlined style={{ fontSize: 10 }} /> Recientes
+              </span>
+            </div>
+          )}
+          {(suggestions.length > 0 ? suggestions : (!value ? history : [])).map((s, i, arr) => (
             <div key={i} onMouseDown={() => handleSelect(s)}
               style={{
                 padding: '9px 12px', fontSize: 13, cursor: 'pointer',
