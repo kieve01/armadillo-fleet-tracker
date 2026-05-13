@@ -66,6 +66,7 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
     travelMode:  input.travelMode === 'Walking' ? 'WALK' : 'DRIVE',
     routingPreference:        'TRAFFIC_AWARE_OPTIMAL',
     computeAlternativeRoutes: maxAlts > 0,
+    extraComputations:        ['TRAFFIC_ON_POLYLINE'],
     routeModifiers:  { avoidTolls, avoidFerries: input.avoidFerries ?? false },
   }
 

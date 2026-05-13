@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button, Checkbox, Typography, theme } from 'antd'
 import {
-  CloseOutlined, EnvironmentOutlined, AimOutlined,
+  CloseOutlined, CloseCircleOutlined, EnvironmentOutlined, AimOutlined,
   SwapOutlined, SaveOutlined, LoadingOutlined, RetweetOutlined,
 } from '@ant-design/icons'
 import { useRoutesStore } from '../routesStore'
@@ -138,6 +138,19 @@ function PlaceField({
               boxSizing: 'border-box', transition: 'border-color 0.15s',
             }}
           />
+          {value && !pickActive && (
+            <button
+              onClick={() => { onChange(''); setSuggestions([]); setOpen(false) }}
+              title="Limpiar"
+              style={{
+                position: 'absolute', right: 31, top: '50%', transform: 'translateY(-50%)',
+                width: 22, height: 22, border: 'none', borderRadius: 4, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: 'transparent', color: token.colorTextTertiary,
+              }}>
+              <CloseCircleOutlined style={{ fontSize: 11 }} />
+            </button>
+          )}
           <button onClick={pickActive ? onPickCancel : onPickStart} disabled={disabled}
             title={pickActive ? 'Cancelar' : 'Seleccionar en mapa'}
             style={{
@@ -474,8 +487,8 @@ export default function RouteCalculatorPanel({ open, onClose }: Props) {
                   {hasTrafficDelay((activeAlt as any).trafficSpans) && (
                     <div style={{
                       marginTop: 8, padding: '5px 8px', borderRadius: 6,
-                      background: token.colorWarningBg, border: `1px solid ${token.colorWarningBorder}`,
-                      fontSize: 11, color: token.colorWarning,
+                      background: '#fff3e0', border: '1px solid #ffcc02',
+                      fontSize: 11, color: '#e65100',
                       display: 'flex', alignItems: 'center', gap: 5,
                     }}>
                       <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#f44336', flexShrink: 0 }} />
