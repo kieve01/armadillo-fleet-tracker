@@ -55,11 +55,17 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   const destination = input.waypoints[input.waypoints.length - 1]
   const maxAlts     = Math.min((input.maxAlternatives ?? 3) - 1, 2)
 
+  // departureTime en RFC3339 — requerido para que Google use tráfico en tiempo real.
+  // Sin este campo la API usa tráfico histórico promedio y speedReadingIntervals
+  // devuelve casi todo NORMAL (sin variación), lo que resulta en ruta siempre verde.
+  const departureTimeISO = (input.departureTime ?? new Date()).toISOString()
+
   const body: any = {
     origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
     destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
     travelMode:              input.travelMode === 'Walking' ? 'WALK' : 'DRIVE',
     routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
+    departureTime:           departureTimeISO,
     computeAlternativeRoutes: maxAlts > 0,
     extraComputations:       ['TRAFFIC_ON_POLYLINE'],
     polylineQuality:         'HIGH_QUALITY',
@@ -303,9 +309,10 @@ export function registerRouteRoutes(app: Express): void {
           destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
           travelMode:              'DRIVE',
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
+          departureTime:           new Date().toISOString(),
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
-    polylineQuality:         'HIGH_QUALITY',
+          polylineQuality:         'HIGH_QUALITY',
         }),
       })
       const data: any = await googleResp.json()
