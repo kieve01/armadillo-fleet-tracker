@@ -13,6 +13,10 @@ import type { TrafficSpan } from '../routesService'
 
 const BASE = import.meta.env.VITE_API_BASE_URL as string
 
+// Cache de placeId → resolved — evita llamadas duplicadas a Place Details ($17/1000)
+const placeCache = new Map<string, { label: string; point: [number, number] }>()
+
+
 const SIDEBAR_EXPANDED  = 280
 const SIDEBAR_COLLAPSED = 56
 
@@ -20,7 +24,7 @@ interface PlaceSuggestion { text: string; placeId: string; position?: [number, n
 interface ResolvedPlace   { label: string; lng: number; lat: number; point: [number, number] }
 
 async function fetchSuggestions(q: string): Promise<PlaceSuggestion[]> {
-  if (q.length < 2) return []
+  if (q.length < 3) return []
   try {
     const r = await fetch(`${BASE}/api/places/suggest?q=${encodeURIComponent(q)}`)
     if (!r.ok) return []
@@ -73,6 +77,7 @@ function saveToHistory(item: PlaceSuggestion) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify([item, ...prev].slice(0, MAX_HISTORY)))
 }
 
+
 // ─── PlaceField ───────────────────────────────────────────────────────────────
 function PlaceField({
   dotColor, placeholder, value, onChange, onSelect,
@@ -94,7 +99,7 @@ function PlaceField({
   const handleChange = (v: string) => {
     onChange(v); setSuggestions([])
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (v.length < 2) { setOpen(false); return }
+    if (v.length < 3) { setOpen(false); return }
     setLoading(true)
     debounceRef.current = window.setTimeout(async () => {
       const res = await fetchSuggestions(v)
@@ -105,17 +110,24 @@ function PlaceField({
   const handleSelect = async (item: PlaceSuggestion) => {
     onChange(item.text); setOpen(false); setSuggestions([])
     saveToHistory(item); setHistory(loadHistory())
-    // Si la sugerencia ya trae coordenadas (desde SearchText), usarlas directamente
     if (item.position) {
       const [lng, lat] = item.position
       onSelect({ label: item.text, lng, lat, point: item.position })
       return
     }
-    // Fallback: resolver por placeId o texto
     let resolved: ResolvedPlace | null = null
     if (item.placeId) {
+      // Cache para evitar llamadas duplicadas a Place Details ($17/1000)
+      if (placeCache.has(item.placeId)) {
+        const cached = placeCache.get(item.placeId)!
+        onChange(cached.label); onSelect({ label: cached.label, lng: cached.point[0], lat: cached.point[1], point: cached.point })
+        return
+      }
       const r = await resolvePlaceId(item.placeId)
-      if (r) resolved = { label: r.label, lng: r.point[0], lat: r.point[1], point: r.point }
+      if (r) {
+        placeCache.set(item.placeId, { label: r.label, point: r.point })
+        resolved = { label: r.label, lng: r.point[0], lat: r.point[1], point: r.point }
+      }
     }
     if (!resolved) resolved = await resolveText(item.text)
     if (resolved) { onChange(resolved.label); onSelect(resolved) }

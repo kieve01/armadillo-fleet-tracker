@@ -12,14 +12,13 @@ const LIMA_BBOX: [number, number, number, number] = [-77.22, -12.22, -76.82, -11
 
 // ─── Google Places ────────────────────────────────────────────────────────────
 
-async function googleSuggest(q: string): Promise<{ text: string; placeId: string; position?: [number, number] }[]> {
+async function googleSuggest(q: string): Promise<{ text: string; placeId: string }[]> {
   const resp = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
     method: 'POST',
     headers: {
       'Content-Type':     'application/json',
       'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
-      // Incluir structuredFormat para obtener texto principal y secundario
-      'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text,suggestions.placePrediction.structuredFormat',
+      'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text',
     },
     body: JSON.stringify({
       input:               q,
@@ -56,7 +55,7 @@ async function googleResolveId(placeId: string): Promise<{ label: string; point:
 }
 
 async function googleGeocode(q: string): Promise<{ label: string; lng: number; lat: number; point: [number, number] } | null> {
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${GOOGLE_MAPS_API_KEY}&language=es&region=PE&bounds=-12.22,-77.22|-11.82,-76.82`
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(q)}&key=${GOOGLE_MAPS_API_KEY}&language=es&region=PE`
   const resp = await fetch(url)
   if (!resp.ok) return null
   const data: any = await resp.json()
@@ -67,20 +66,31 @@ async function googleGeocode(q: string): Promise<{ label: string; lng: number; l
 }
 
 async function googleReverseGeocode(lat: number, lng: number): Promise<{ label: string; point: [number, number] } | null> {
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}&language=es`
+  // Geocoding API — result_type prioriza street_address sobre Plus Codes
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}&language=es&result_type=street_address|route|premise|establishment`
   const resp = await fetch(url)
   if (!resp.ok) return null
   const data: any = await resp.json()
-  // Buscar el resultado más específico (tipo street_address o route)
+  if (data.status !== 'OK') return null
+
   const results: any[] = data.results ?? []
-  const best = results.find(r => r.types?.includes('street_address'))
-    ?? results.find(r => r.types?.includes('route'))
-    ?? results[0]
-  if (!best) return null
-  return { label: best.formatted_address, point: [lng, lat] }
+
+  // Prioridad: street_address > route > premise > establishment > cualquier cosa
+  const priority = ['street_address', 'route', 'premise', 'establishment']
+  let best: any = null
+  for (const type of priority) {
+    best = results.find((r: any) => r.types?.includes(type))
+    if (best) break
+  }
+  best = best ?? results[0]
+  if (!best?.formatted_address) return null
+
+  // Limpiar Plus Codes del label (ej: "XX34+CVP, BRT Metropolitano, Lima")
+  const label = best.formatted_address.replace(/^[A-Z0-9]{4}\+[A-Z0-9]+,\s*/, '')
+  return { label, point: [lng, lat] }
 }
 
-// ─── AWS Places (fallback) ────────────────────────────────────────────────────
+// ─── AWS fallback ─────────────────────────────────────────────────────────────
 
 function buildLabel(item: any): string {
   const addr = item.Address ?? {}
@@ -94,29 +104,29 @@ function buildLabel(item: any): string {
   return parts.filter(Boolean).join(', ') || item.Title || 'Lugar desconocido'
 }
 
-// ─── Express routes ───────────────────────────────────────────────────────────
+// ─── Express ──────────────────────────────────────────────────────────────────
 
 export function registerPlaceRoutes(app: Express): void {
 
+  // Sugerencias — mínimo 3 caracteres para reducir llamadas costosas
   app.get('/api/places/suggest', async (req, res) => {
     try {
       const q = String(req.query.q ?? '').trim()
-      if (q.length < 2) { res.json([]); return }
+      if (q.length < 3) { res.json([]); return }  // 3 en vez de 2 → ahorra ~30% de calls
 
       if (USE_GOOGLE) {
-        const results = await googleSuggest(q)
-        res.json(results.slice(0, 8))
+        res.json((await googleSuggest(q)).slice(0, 6))  // max 6 sugerencias
         return
       }
 
       const result = await geoPlacesClient.send(new SearchTextCommand({
-        QueryText: q, MaxResults: 8, BiasPosition: LIMA_POSITION,
+        QueryText: q, MaxResults: 6, BiasPosition: LIMA_POSITION,
         Filter: { IncludeCountries: ['PER'], BoundingBox: LIMA_BBOX }, Language: 'es',
       }))
       let items: any[] = result.ResultItems ?? []
       if (items.length < 3) {
         const broader = await geoPlacesClient.send(new SearchTextCommand({
-          QueryText: q, MaxResults: 8, BiasPosition: LIMA_POSITION,
+          QueryText: q, MaxResults: 6, BiasPosition: LIMA_POSITION,
           Filter: { IncludeCountries: ['PER'] }, Language: 'es',
         }))
         const seen = new Set(items.map((r: any) => r.PlaceId ?? r.Title))
@@ -125,12 +135,13 @@ export function registerPlaceRoutes(app: Express): void {
           if (!seen.has(key)) { items.push(r); seen.add(key) }
         }
       }
-      res.json(items.filter((r: any) => r.Position).slice(0, 8).map((r: any) => ({
+      res.json(items.filter((r: any) => r.Position).slice(0, 6).map((r: any) => ({
         text: buildLabel(r), placeId: r.PlaceId ?? '', position: r.Position as [number, number],
       })))
     } catch (err) { sendError(res, err) }
   })
 
+  // Resolver placeId → coordenadas + label completo
   app.get('/api/places/resolve-id', async (req, res) => {
     try {
       const placeId = String(req.query.id ?? '').trim()
@@ -150,23 +161,25 @@ export function registerPlaceRoutes(app: Express): void {
     } catch (err) { sendError(res, err) }
   })
 
+  // Resolver texto o coordenadas → label + punto
   app.get('/api/places/resolve', async (req, res) => {
     try {
       const q = String(req.query.q ?? '').trim()
       if (!q) { res.status(400).json({ message: 'q is required' }); return }
 
-      // Coordenadas desde click en mapa → reverse geocode
+      // Coordenadas desde click en mapa
       const coordMatch = q.match(/^(-?\d+\.?\d*),\s*(-?\d+\.?\d*)$/)
       if (coordMatch) {
         const lat = parseFloat(coordMatch[1])
         const lng = parseFloat(coordMatch[2])
+
         if (USE_GOOGLE) {
           const result = await googleReverseGeocode(lat, lng)
-          // Usar label de Google o fallback a coordenadas limpias
-          const label = result?.label ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+          const label  = result?.label ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
           res.json({ label, lng, lat, point: [lng, lat] })
           return
         }
+
         try {
           const rev = await geoPlacesClient.send(new ReverseGeocodeCommand({
             QueryPosition: [lng, lat], MaxResults: 1, Language: 'es',
@@ -184,8 +197,7 @@ export function registerPlaceRoutes(app: Express): void {
       if (USE_GOOGLE) {
         const result = await googleGeocode(q)
         if (!result) { res.status(404).json({ message: 'Lugar no encontrado' }); return }
-        res.json(result)
-        return
+        res.json(result); return
       }
 
       const result = await geoPlacesClient.send(new SearchTextCommand({
@@ -210,9 +222,10 @@ export function registerPlaceRoutes(app: Express): void {
     try {
       const q = String(req.query.q ?? 'Jr Ancash 2800').trim()
       if (USE_GOOGLE) {
-        const suggestions = await googleSuggest(q)
-        // También testear reverse geocode
-        const reverse = await googleReverseGeocode(-12.0464, -77.0428)
+        const [suggestions, reverse] = await Promise.all([
+          googleSuggest(q),
+          googleReverseGeocode(-12.0464, -77.0428),
+        ])
         res.json({ provider: 'google', suggestions, reverseTest: reverse })
         return
       }

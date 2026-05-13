@@ -10,7 +10,7 @@ import { sendError } from '../../http/sendError'
 export interface TrafficSpan {
   startIndex: number
   endIndex:   number
-  congestion: number
+  congestion: number   // 0=verde 0.5=naranja 1=rojo
   speedKmh:   number | null
 }
 
@@ -33,8 +33,6 @@ interface CalcInput {
 }
 
 // ─── Google Routes API ────────────────────────────────────────────────────────
-
-const GOOGLE_ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes'
 
 function decodePolyline(encoded: string): [number, number][] {
   const coords: [number, number][] = []
@@ -62,7 +60,6 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
     travelMode:              input.travelMode === 'Walking' ? 'WALK' : 'DRIVE',
     routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
     computeAlternativeRoutes: maxAlts > 0,
-    // CRÍTICO: extraComputations es necesario para obtener speedReadingIntervals
     extraComputations:       ['TRAFFIC_ON_POLYLINE'],
     routeModifiers: {
       avoidTolls:   input.avoidTolls   ?? false,
@@ -76,27 +73,20 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
     }))
   }
 
-  const resp = await fetch(GOOGLE_ROUTES_URL, {
+  const resp = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
     method:  'POST',
     headers: {
-      'Content-Type':   'application/json',
-      'X-Goog-Api-Key': GOOGLE_MAPS_API_KEY!,
-      // CRÍTICO: el FieldMask debe incluir travelAdvisory EXACTAMENTE así
-      'X-Goog-FieldMask': [
-        'routes.duration',
-        'routes.distanceMeters',
-        'routes.description',
-        'routes.polyline.encodedPolyline',
-        'routes.travelAdvisory.speedReadingIntervals',
-        'routes.travelAdvisory.tollInfo',
-      ].join(','),
+      'Content-Type':     'application/json',
+      'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
+      // Incluir TODOS los campos necesarios — sin uno solo el campo no llega
+      'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters,routes.description,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals,routes.travelAdvisory.tollInfo',
     },
     body: JSON.stringify(body),
   })
 
   if (!resp.ok) {
     const text = await resp.text()
-    throw new Error(`Google Routes API error ${resp.status}: ${text}`)
+    throw new Error(`Google Routes error ${resp.status}: ${text}`)
   }
 
   const data: any     = await resp.json()
@@ -104,8 +94,10 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   if (!routes.length) return []
 
   return routes.map((route: any) => {
-    const durationSecs = route.duration ? parseInt(route.duration.replace('s', ''), 10) : null
-    const distanceKm   = route.distanceMeters ? route.distanceMeters / 1000 : null
+    const durationSecs = route.duration
+      ? parseInt(route.duration.replace('s', ''), 10)
+      : null
+    const distanceKm = route.distanceMeters ? route.distanceMeters / 1000 : null
 
     const geometry: [number, number][] = route.polyline?.encodedPolyline
       ? decodePolyline(route.polyline.encodedPolyline)
@@ -115,30 +107,30 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
       ? [geometry[0], geometry[geometry.length - 1]]
       : [origin, destination]
 
-    // Traffic spans desde speedReadingIntervals
+    // speedReadingIntervals mapean directamente a índices de la polyline decodificada
     const trafficSpans: TrafficSpan[] = []
     const intervals: any[] = route.travelAdvisory?.speedReadingIntervals ?? []
     for (const interval of intervals) {
       const startIdx = interval.startPolylinePointIndex ?? 0
       const endIdx   = interval.endPolylinePointIndex   ?? 0
-      if (startIdx >= endIdx) continue
-      const speed    = interval.speed ?? 'NORMAL'
-      // Google speed values: NORMAL, SLOW, TRAFFIC_JAM
-      const congestion = speed === 'TRAFFIC_JAM' ? 1.0
-        : speed === 'SLOW'  ? 0.55
-        : 0.1
-      trafficSpans.push({ startIndex: startIdx, endIndex: endIdx, congestion, speedKmh: null })
+      if (endIdx <= startIdx) continue
+      const speed = interval.speed ?? 'NORMAL'
+      trafficSpans.push({
+        startIndex: startIdx,
+        endIndex:   endIdx,
+        congestion: speed === 'TRAFFIC_JAM' ? 1.0 : speed === 'SLOW' ? 0.55 : 0.1,
+        speedKmh:   null,
+      })
     }
 
     return { geometry, snappedWaypoints, distanceKm, durationSeconds: durationSecs, trafficSpans, description: route.description }
   })
 }
 
-// ─── AWS Routes API (fallback) ────────────────────────────────────────────────
+// ─── AWS fallback ─────────────────────────────────────────────────────────────
 
 type GeoRoutesMode = 'Car' | 'Truck' | 'Pedestrian'
-
-function toGeoRoutesMode(mode: RouteTravelMode): GeoRoutesMode {
+function toAWSMode(mode: RouteTravelMode): GeoRoutesMode {
   if (mode === 'Walking') return 'Pedestrian'
   if (mode === 'Truck')   return 'Truck'
   return 'Car'
@@ -176,9 +168,8 @@ function extractSnappedWaypoints(legs: any[], fallback: [number, number][]): [nu
 }
 
 async function callAWSRoutes(input: CalcInput): Promise<RouteResult[]> {
-  const mode      = toGeoRoutesMode(input.travelMode)
+  const mode      = toAWSMode(input.travelMode)
   const extraAlts = Math.min((input.maxAlternatives ?? 3) - 1, 2)
-
   const resp = await geoRoutesClient.send(new CalculateRoutesCommand({
     Origin:            input.waypoints[0],
     Destination:       input.waypoints[input.waypoints.length - 1],
@@ -187,19 +178,18 @@ async function callAWSRoutes(input: CalcInput): Promise<RouteResult[]> {
     LegGeometryFormat: 'Simple',
     ...(extraAlts > 0 ? { MaxAlternatives: extraAlts } : {}),
     SpanAdditionalFeatures: ['Duration', 'TypicalDuration', 'SpeedLimit'] as any,
-    ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: input.avoidFerries ?? true, AvoidTolls: input.avoidTolls ?? false } } : {}),
-    ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: input.avoidFerries ?? true, AvoidTolls: input.avoidTolls ?? false } } : {}),
+    ...(mode === 'Car'   ? { CarOptions:   { AvoidFerries: true, AvoidTolls: input.avoidTolls ?? false } } : {}),
+    ...(mode === 'Truck' ? { TruckOptions: { AvoidFerries: true, AvoidTolls: input.avoidTolls ?? false } } : {}),
   }))
-
   return (resp.Routes ?? []).map((route: any) => {
     const legs     = route.Legs ?? []
     const geometry = extractGeometry(legs)
     return {
       geometry,
       snappedWaypoints: extractSnappedWaypoints(legs, input.waypoints),
-      distanceKm:      route.Summary?.Distance != null ? route.Summary.Distance / 1000 : null,
-      durationSeconds: route.Summary?.Duration ?? null,
-      trafficSpans:    [],  // AWS no tiene datos para Lima
+      distanceKm:       route.Summary?.Distance != null ? route.Summary.Distance / 1000 : null,
+      durationSeconds:  route.Summary?.Duration ?? null,
+      trafficSpans:     [],
     }
   })
 }
@@ -216,6 +206,8 @@ function isNoRouteError(err: any): boolean {
     msg.includes('Route cannot be calculated') || msg.includes('ZERO_RESULTS')
   )
 }
+
+// ─── Express ──────────────────────────────────────────────────────────────────
 
 export function registerRouteRoutes(app: Express): void {
 
@@ -239,7 +231,6 @@ export function registerRouteRoutes(app: Express): void {
         if (isNoRouteError(err)) { res.status(422).json({ message: 'No se encontró ruta entre los puntos seleccionados.', code: 'NO_ROUTE' }); return }
         throw err
       }
-
       if (!results.length) { res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return }
 
       const [main, ...alts] = results
@@ -265,53 +256,53 @@ export function registerRouteRoutes(app: Express): void {
     } catch (err) { sendError(res, err) }
   })
 
-  // Debug con respuesta raw de Google para diagnosticar tráfico
+  // Debug con respuesta cruda para verificar spans
   app.post('/api/routes/debug', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
       if (waypoints.length < 2) { res.status(400).json({ message: 'Need 2 waypoints' }); return }
 
-      if (USE_GOOGLE) {
-        // Llamada raw a Google para ver exactamente qué devuelve
-        const origin      = waypoints[0]
-        const destination = waypoints[1]
-        const resp = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
-          method: 'POST',
-          headers: {
-            'Content-Type':     'application/json',
-            'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
-            'X-Goog-FieldMask': 'routes.duration,routes.distanceMeters,routes.description,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals',
-          },
-          body: JSON.stringify({
-            origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
-            destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
-            travelMode:              'DRIVE',
-            routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
-            computeAlternativeRoutes: true,
-            extraComputations:       ['TRAFFIC_ON_POLYLINE'],
-          }),
-        })
-        const data: any = await resp.json()
-        res.json({
-          provider:   'google',
-          httpStatus: resp.status,
-          routeCount: (data.routes ?? []).length,
-          routes: (data.routes ?? []).map((r: any, i: number) => ({
-            index:       i,
-            durationMin: r.duration ? Math.round(parseInt(r.duration) / 60) : null,
-            distanceKm:  r.distanceMeters ? r.distanceMeters / 1000 : null,
-            description: r.description,
-            spanCount:   (r.travelAdvisory?.speedReadingIntervals ?? []).length,
-            sampleSpans: (r.travelAdvisory?.speedReadingIntervals ?? []).slice(0, 3),
-            polylineLength: r.polyline?.encodedPolyline?.length ?? 0,
-          })),
-          rawError: data.error,
-        })
+      if (!USE_GOOGLE) {
+        const results = await calcRoutes({ waypoints, travelMode: 'Car', maxAlternatives: 3, departureTime: new Date() })
+        res.json({ provider: 'aws', routeCount: results.length, routes: results.map((r, i) => ({ index: i, durationMin: r.durationSeconds ? Math.round(r.durationSeconds / 60) : null, distanceKm: r.distanceKm, spanCount: r.trafficSpans.length })) })
         return
       }
 
-      const results = await calcRoutes({ waypoints, travelMode: 'Car', maxAlternatives: 3, departureTime: new Date() })
-      res.json({ provider: 'aws', routeCount: results.length, routes: results.map((r, i) => ({ index: i, durationMin: r.durationSeconds ? Math.round(r.durationSeconds / 60) : null, distanceKm: r.distanceKm, spanCount: r.trafficSpans.length })) })
+      const origin      = waypoints[0]
+      const destination = waypoints[1]
+      const googleResp  = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+        method: 'POST',
+        headers: {
+          'Content-Type':     'application/json',
+          'X-Goog-Api-Key':   GOOGLE_MAPS_API_KEY!,
+          'X-Goog-FieldMask': 'routes.duration,routes.staticDuration,routes.distanceMeters,routes.description,routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals',
+        },
+        body: JSON.stringify({
+          origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
+          destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
+          travelMode:              'DRIVE',
+          routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
+          computeAlternativeRoutes: true,
+          extraComputations:       ['TRAFFIC_ON_POLYLINE'],
+        }),
+      })
+      const data: any = await googleResp.json()
+      res.json({
+        provider:   'google',
+        httpStatus: googleResp.status,
+        routeCount: (data.routes ?? []).length,
+        error:      data.error ?? null,
+        routes: (data.routes ?? []).map((r: any, i: number) => ({
+          index:           i,
+          durationMin:     r.duration ? Math.round(parseInt(r.duration) / 60) : null,
+          staticDurationMin: r.staticDuration ? Math.round(parseInt(r.staticDuration) / 60) : null,
+          distanceKm:      r.distanceMeters ? r.distanceMeters / 1000 : null,
+          description:     r.description,
+          spanCount:       (r.travelAdvisory?.speedReadingIntervals ?? []).length,
+          sampleSpans:     (r.travelAdvisory?.speedReadingIntervals ?? []).slice(0, 5),
+          polylinePoints:  r.polyline?.encodedPolyline ? decodePolyline(r.polyline.encodedPolyline).length : 0,
+        })),
+      })
     } catch (err) { sendError(res, err) }
   })
 
@@ -321,7 +312,7 @@ export function registerRouteRoutes(app: Express): void {
       const waypoints   = parseWaypoints(req.body?.waypoints)
       if (waypoints.length < 2) { res.status(400).json({ message: 'At least 2 waypoints are required' }); return }
       const travelMode = parseTravelMode(req.body?.travelMode)
-      if (!travelMode) { res.status(400).json({ message: 'travelMode must be one of Car, Truck or Walking' }); return }
+      if (!travelMode) { res.status(400).json({ message: 'travelMode must be Car, Truck or Walking' }); return }
 
       let results: RouteResult[]
       try {
@@ -330,14 +321,17 @@ export function registerRouteRoutes(app: Express): void {
         if (isNoRouteError(err)) { res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return }
         throw err
       }
-
       if (!results.length) { res.status(422).json({ message: 'No se encontró ruta', code: 'NO_ROUTE' }); return }
 
-      const main = results[0]
-      const now  = new Date().toISOString()
+      const main = results[0], now = new Date().toISOString()
       const existing = await getRoute(routeId)
-      await putRoute({ routeId, waypoints, geometry: main.geometry, travelMode, distance: main.distanceKm, durationSeconds: main.durationSeconds, createdAt: existing?.createdAt ?? now, updatedAt: now })
-      res.json({ routeId, waypoints, geometry: main.geometry, travelMode, distance: main.distanceKm, durationSeconds: main.durationSeconds })
+      const route: RouteRecord = {
+        routeId, waypoints, geometry: main.geometry, travelMode,
+        distance: main.distanceKm, durationSeconds: main.durationSeconds,
+        createdAt: existing?.createdAt ?? now, updatedAt: now,
+      }
+      await putRoute(route)
+      res.json(route)
     } catch (err) { sendError(res, err) }
   })
 
@@ -349,7 +343,11 @@ export function registerRouteRoutes(app: Express): void {
 
 function parseWaypoints(value: unknown): [number, number][] {
   if (!Array.isArray(value)) return []
-  return value.filter(p => Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number' && Number.isFinite(p[0]) && Number.isFinite(p[1])) as [number, number][]
+  return value.filter(p =>
+    Array.isArray(p) && p.length === 2 &&
+    typeof p[0] === 'number' && Number.isFinite(p[0]) &&
+    typeof p[1] === 'number' && Number.isFinite(p[1])
+  ) as [number, number][]
 }
 
 function parseTravelMode(value: unknown): RouteTravelMode | null {
