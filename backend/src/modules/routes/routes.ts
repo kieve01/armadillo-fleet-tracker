@@ -58,7 +58,9 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   // departureTime en RFC3339 — requerido para que Google use tráfico en tiempo real.
   // Sin este campo la API usa tráfico histórico promedio y speedReadingIntervals
   // devuelve casi todo NORMAL (sin variación), lo que resulta en ruta siempre verde.
-  const departureTimeISO = (input.departureTime ?? new Date()).toISOString()
+  // +3 minutos para compensar drift del reloj del contenedor ECS — Google rechaza
+  // timestamps pasados con INVALID_ARGUMENT "Timestamp must be set to a future time".
+  const departureTimeISO = new Date(Date.now() + 3 * 60 * 1000).toISOString()
 
   const body: any = {
     origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
@@ -309,7 +311,7 @@ export function registerRouteRoutes(app: Express): void {
           destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
           travelMode:              'DRIVE',
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
-          departureTime:           new Date().toISOString(),
+          departureTime:           new Date(Date.now() + 3 * 60 * 1000).toISOString(),
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
           polylineQuality:         'HIGH_QUALITY',
