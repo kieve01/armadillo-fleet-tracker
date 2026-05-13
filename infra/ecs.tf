@@ -48,6 +48,7 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "GEOFENCE_COLLECTION", value = var.geofence_collection },
       { name = "ROUTE_CALCULATOR",    value = var.route_calculator },
       { name = "PLACE_INDEX",         value = var.place_index },
+      { name = "GOOGLE_MAPS_API_KEY", value = var.google_maps_api_key },
     ]
 
     logConfiguration = {

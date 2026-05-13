@@ -47,3 +47,8 @@ variable "desired_count" {
   type    = number
   default = 1
 }
+
+variable "google_maps_api_key" {
+  type    = string
+  default = ""
+}
