@@ -67,7 +67,6 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
     routingPreference:        'TRAFFIC_AWARE_OPTIMAL',
     computeAlternativeRoutes: maxAlts > 0,
     routeModifiers:  { avoidTolls, avoidFerries: input.avoidFerries ?? false },
-    departureTime:   (input.departureTime ?? new Date()).toISOString(),
   }
 
   if (input.waypoints.length > 2) {
