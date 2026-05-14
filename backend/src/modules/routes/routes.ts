@@ -50,30 +50,10 @@ function decodePolyline(encoded: string): [number, number][] {
   return coords
 }
 
-// Obtiene el tiempo real desde worldtimeapi.org para evitar drift del reloj ECS.
-// El reloj del contenedor Fargate puede estar atrasado varios minutos; Google Routes
-// rechaza departureTime en el pasado con INVALID_ARGUMENT. Al obtener el tiempo de
-// un servidor externo y agregarle 30s de margen, siempre mandamos un timestamp futuro válido.
-async function getTrueNow(): Promise<string> {
-  const fallback = new Date(Date.now() + 5 * 60 * 1000).toISOString()
-  try {
-    const r = await fetch('https://worldtimeapi.org/api/timezone/America/Lima', {
-      signal: AbortSignal.timeout(2000),
-    })
-    if (r.ok) {
-      const d: any = await r.json()
-      console.log('[getTrueNow] worldtimeapi unixtime:', d?.unixtime, '-> ISO:', d?.unixtime ? new Date((d.unixtime + 30) * 1000).toISOString() : 'N/A')
-      if (d?.unixtime) {
-        return new Date((d.unixtime + 30) * 1000).toISOString()
-      }
-    } else {
-      console.log('[getTrueNow] worldtimeapi status:', r.status)
-    }
-  } catch (e: any) {
-    console.log('[getTrueNow] worldtimeapi error:', e?.message)
-  }
-  console.log('[getTrueNow] using fallback Date.now():', fallback, '| Date.now() raw:', Date.now())
-  return fallback
+// departureTime 2 minutos en el futuro — el reloj ECS Fargate está sincronizado con NTP
+// de Amazon y es confiable. Google rechaza timestamps pasados; +2min da margen suficiente.
+function getFutureDepartureTime(): string {
+  return new Date(Date.now() + 2 * 60 * 1000).toISOString()
 }
 
 async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
@@ -82,7 +62,7 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   const maxAlts     = Math.min((input.maxAlternatives ?? 3) - 1, 2)
 
   // departureTime desde servidor externo para evitar drift del reloj ECS.
-  const departureTimeISO = await getTrueNow()
+  const departureTimeISO = getFutureDepartureTime()
 
   const body: any = {
     origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
@@ -309,6 +289,24 @@ export function registerRouteRoutes(app: Express): void {
     } catch (err) { sendError(res, err) }
   })
 
+  // Endpoint temporal de diagnóstico — muestra el tiempo real del contenedor
+  app.get('/api/routes/debug-time', async (_req, res) => {
+    const nodeNow = Date.now()
+    const nodeISO = new Date(nodeNow).toISOString()
+    const plus5   = new Date(nodeNow + 5 * 60 * 1000).toISOString()
+    let worldtime: any = null
+    let worldtimeError: string | null = null
+    try {
+      const r = await fetch('https://worldtimeapi.org/api/timezone/America/Lima', {
+        signal: AbortSignal.timeout(3000),
+      })
+      worldtime = await r.json()
+    } catch (e: any) {
+      worldtimeError = e?.message ?? 'unknown'
+    }
+    res.json({ nodeNow, nodeISO, plus5, worldtime, worldtimeError })
+  })
+
   app.post('/api/routes/debug', async (req, res) => {
     try {
       const waypoints = parseWaypoints(req.body?.waypoints)
@@ -333,7 +331,7 @@ export function registerRouteRoutes(app: Express): void {
           destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
           travelMode:              'DRIVE',
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
-          departureTime:           await getTrueNow(),
+          departureTime:           getFutureDepartureTime(),
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
           polylineQuality:         'HIGH_QUALITY',
