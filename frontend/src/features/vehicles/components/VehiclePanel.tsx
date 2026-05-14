@@ -88,7 +88,7 @@ function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => v
 type SortOrder = 'activity' | 'alpha' | 'manual'
 
 // useManualOrder: persists via DynamoDB (trackerMeta.deviceOrder)
-function useManualOrder(trackerName: string, deviceIds: string[], savedOrder: string[], onSave: (o: string[]) => void) {
+function useManualOrder(_trackerName: string, deviceIds: string[], savedOrder: string[], onSave: (o: string[]) => void) {
   const [order, setOrder] = useState<string[]>(() => {
     const set = new Set(savedOrder)
     return [...savedOrder.filter((id: string) => deviceIds.includes(id)), ...deviceIds.filter((id: string) => !set.has(id))]
@@ -490,7 +490,8 @@ function TrackerSection({
       isHidden={!!hiddenDevices[`${d.trackerName}/${d.deviceId}`]}
       onToggleVisibility={() => onToggleDeviceVisibility(d.deviceId)}
       onSelect={() => onSelectDevice(d.deviceId, d.trackerName)}
-      onNavMode={() => onNavMode(d.deviceId, d.trackerName)}
+      onNavMode={onNavMode}
+      onExitNav={onExitNav}
     />
   )
 

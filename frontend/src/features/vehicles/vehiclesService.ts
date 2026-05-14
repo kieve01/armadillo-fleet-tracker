@@ -96,7 +96,7 @@ export async function listTrackerMeta(trackerName: string): Promise<TrackerMeta>
   } catch (error) {
     // 404 = meta doesn't exist yet, return defaults
     if (error instanceof HttpRequestError && error.status === 404) {
-      return { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
+      return { trackerName, displayName: trackerName, groups: [], deviceGroups: {}, deviceOrder: [] }
     }
     throw toError(error)
   }

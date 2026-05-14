@@ -110,6 +110,7 @@ export const useVehiclesStore = create<VehiclesState>()(
                 displayName: r.trackerName,
                 groups: [],
                 deviceGroups: {},
+                deviceOrder: [],
               }))
             )),
           ])
