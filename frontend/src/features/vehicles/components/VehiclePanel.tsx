@@ -311,16 +311,9 @@ export default function VehiclePanel() {
     }
   }
 
-  const handleNavMode = (deviceId: string, trackerName: string) => {
-    const animated    = getAnimatedPosition(trackerName, deviceId)
-    const storeDevice = devices.find(d => d.deviceId === deviceId && d.trackerName === trackerName)
-    const lat     = animated?.lat     ?? storeDevice?.lat
-    const lng     = animated?.lng     ?? storeDevice?.lng
-    const heading = animated?.heading ?? storeDevice?.heading ?? 0
+  const handleNavMode = (_deviceId: string, _trackerName: string) => {
+    // Solo cambia el modo — useMap reacciona al cambio y posiciona la cámara
     setFollowMode('navigation')
-    if (lat != null && lng != null && map) {
-      map.easeTo({ center: [lng, lat], zoom: 18, bearing: heading, pitch: 60, duration: 800, offset: [0, 80] })
-    }
   }
 
   const devicesByTracker = useMemo(() => {
@@ -336,18 +329,13 @@ export default function VehiclePanel() {
       const meta = useVehiclesStore.getState().trackerMeta[trackerName]
       const currentMembers = Object.entries(meta?.deviceGroups ?? {})
         .filter(([, gid]) => gid === editGroupId).map(([did]) => did)
-      // Remove members no longer selected
       currentMembers.filter(id => !deviceIds.includes(id))
         .forEach(id => assignDeviceToGroup(trackerName, id, null))
-      // Add newly selected (may come from another group — overwrite)
       deviceIds.forEach(id => assignDeviceToGroup(trackerName, id, editGroupId))
     } else {
-      createGroup(trackerName, name)
-      setTimeout(() => {
-        const meta = useVehiclesStore.getState().trackerMeta[trackerName]
-        const newGroup = meta?.groups[meta.groups.length - 1]
-        if (newGroup) deviceIds.forEach(id => assignDeviceToGroup(trackerName, id, newGroup.id))
-      }, 0)
+      // createGroup returns the new group ID synchronously
+      const newGroupId = createGroup(trackerName, name)
+      deviceIds.forEach(id => assignDeviceToGroup(trackerName, id, newGroupId))
     }
     setGroupModal(null)
   }

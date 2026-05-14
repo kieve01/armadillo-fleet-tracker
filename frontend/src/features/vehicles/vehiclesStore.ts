@@ -51,7 +51,7 @@ interface VehiclesState {
   deleteDevice: (trackerName: string, deviceId: string) => Promise<void>
 
   // Meta — stored in localStorage only
-  createGroup: (trackerName: string, groupName: string) => void
+  createGroup: (trackerName: string, groupName: string) => string
   renameGroup: (trackerName: string, groupId: string, newName: string) => void
   deleteGroup: (trackerName: string, groupId: string) => void
   assignDeviceToGroup: (trackerName: string, deviceId: string, groupId: string | null) => void
@@ -161,6 +161,7 @@ export const useVehiclesStore = create<VehiclesState>()(
         const updated: TrackerMeta = { ...current, groups: [...current.groups, newGroup] }
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
         putTrackerMeta(trackerName, updated).catch(console.error)
+        return newGroup.id
       },
 
       renameGroup: (trackerName, groupId, newName) => {
