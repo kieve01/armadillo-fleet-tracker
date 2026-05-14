@@ -1,11 +1,6 @@
-﻿name: Deploy ECS Infrastructure
+name: Deploy ECS Infrastructure
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "backend/**"
-      - "infra/**"
   workflow_dispatch:
 
 permissions:
@@ -122,7 +117,6 @@ jobs:
         run: |
           IMAGE_URI="${{ steps.ecr.outputs.url }}:${IMAGE_TAG}"
 
-          # Obtener task definition actual y reemplazar imagen con jq
           NEW_TASK_DEF=$(aws ecs describe-task-definition \
             --task-definition ${APP_NAME}-${STAGE}-backend \
             --region ${AWS_REGION} \
@@ -133,7 +127,6 @@ jobs:
                 | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
               ')
 
-          # Registrar nuevo task definition
           NEW_ARN=$(aws ecs register-task-definition \
             --region ${AWS_REGION} \
             --cli-input-json "$NEW_TASK_DEF" \
@@ -142,7 +135,6 @@ jobs:
 
           echo "New task definition: $NEW_ARN"
 
-          # Actualizar service con el nuevo task definition
           aws ecs update-service \
             --cluster ${APP_NAME}-${STAGE} \
             --service ${APP_NAME}-${STAGE}-backend \
