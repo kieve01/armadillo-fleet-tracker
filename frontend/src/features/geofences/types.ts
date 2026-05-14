@@ -18,6 +18,7 @@ export type DrawMode = 'polygon' | 'circle'
 
 export interface GeofenceDraft {
   geofenceId: string
+  trackerName: string
   mode: DrawMode
   drawnFeature: GeoJSON.Feature | null
 }

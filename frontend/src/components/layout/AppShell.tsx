@@ -4,6 +4,8 @@ import Sidebar from './Sidebar'
 import MapView from '../map/MapView'
 import { useUIStore } from '../../store/uiStore'
 import { useMapStore } from '../../store/mapStore'
+import { useGeofencesStore } from '../../features/geofences/geofencesStore'
+import { useRoutesStore } from '../../features/routes/routesStore'
 
 const COLLAPSE_BREAKPOINT = 768
 
@@ -24,6 +26,23 @@ export default function AppShell() {
   useEffect(() => {
     document.body.setAttribute('data-theme', themeMode)
   }, [themeMode])
+
+  // ESC global — cancela cualquier dibujo activo (geocercas o rutas)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // No cancelar si hay un input/textarea enfocado (ej. InlineEdit, modals)
+      const tag = (document.activeElement as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      const { phase: gPhase, cancelDraft: gCancel } = useGeofencesStore.getState()
+      if (gPhase === 'drawing') { gCancel(); return }
+      const { phase: rPhase, cancelDraft: rCancel, cancelCalculating } = useRoutesStore.getState()
+      if (rPhase === 'drawing') { rCancel(); return }
+      if (rPhase === 'calculating') { useRoutesStore.getState().cancelCalculating(); return }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   // Responsive: colapsa sidebar si ventana < breakpoint
   const handleResize = useCallback(() => {

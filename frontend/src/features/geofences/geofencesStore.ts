@@ -5,6 +5,21 @@ import { type Geofence, type GeofenceDraft, type DrawMode, type GeofenceGeometry
 type Phase = 'idle' | 'drawing' | 'confirming' | 'editing'
 const HIDDEN_GEOFENCES_KEY = 'armadillo.hiddenGeofences'
 
+// ── Prefijo: trackerName__geofenceName ───────────────────────────────────────
+// Las geocercas se asocian a un tracker mediante un prefijo en el GeofenceId.
+// Separador "__" (doble guion bajo) — seguro en AWS Location Service.
+const SEP = '__'
+
+export function buildGeofenceId(trackerName: string, name: string): string {
+  return `${trackerName}${SEP}${name}`
+}
+
+export function parseGeofenceId(geofenceId: string): { trackerName: string; name: string } {
+  const idx = geofenceId.indexOf(SEP)
+  if (idx === -1) return { trackerName: '', name: geofenceId }
+  return { trackerName: geofenceId.slice(0, idx), name: geofenceId.slice(idx + SEP.length) }
+}
+
 function loadHiddenGeofences(): Record<string, boolean> {
   if (typeof window === 'undefined') return {}
   try {
@@ -12,14 +27,12 @@ function loadHiddenGeofences(): Record<string, boolean> {
     if (!raw) return {}
     const parsed = JSON.parse(raw) as Record<string, boolean>
     return parsed && typeof parsed === 'object' ? parsed : {}
-  } catch {
-    return {}
-  }
+  } catch { return {} }
 }
 
-function saveHiddenGeofences(hiddenGeofences: Record<string, boolean>): void {
+function saveHiddenGeofences(h: Record<string, boolean>): void {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(HIDDEN_GEOFENCES_KEY, JSON.stringify(hiddenGeofences))
+  window.localStorage.setItem(HIDDEN_GEOFENCES_KEY, JSON.stringify(h))
 }
 
 interface GeofencesState {
@@ -31,13 +44,14 @@ interface GeofencesState {
   hiddenGeofences: Record<string, boolean>
 
   fetchGeofences: () => Promise<void>
-  startCreate: (mode: DrawMode) => void
+  startCreate: (mode: DrawMode, trackerName: string) => void
   setDraftFeature: (feature: GeoJSON.Feature) => void
-  confirmSave: (geofenceId: string) => Promise<void>
+  confirmSave: (name: string) => Promise<void>
   startEdit: (geofence: Geofence) => void
   cancelDraft: () => void
   deleteGeofence: (geofenceId: string) => Promise<void>
   toggleGeofenceVisibility: (geofenceId: string) => void
+  migrateGeofence: (oldId: string, trackerName: string) => Promise<void>
 }
 
 export const useGeofencesStore = create<GeofencesState>((set, get) => ({
@@ -58,25 +72,25 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
     }
   },
 
-  startCreate: (mode) => {
-    set({ phase: 'drawing', draft: { geofenceId: '', mode, drawnFeature: null } })
+  startCreate: (mode, trackerName) => {
+    set({ phase: 'drawing', draft: { geofenceId: '', trackerName, mode, drawnFeature: null } })
   },
 
   setDraftFeature: (feature) => {
-    set((s) => ({
+    set(s => ({
       draft: s.draft ? { ...s.draft, drawnFeature: feature } : null,
       phase: 'confirming',
     }))
   },
 
-  confirmSave: async (geofenceId) => {
+  confirmSave: async (name) => {
     const { draft } = get()
     if (!draft?.drawnFeature) return
-
+    const fullId   = buildGeofenceId(draft.trackerName, name)
     const geometry = featureToGeometry(draft.drawnFeature)
     set({ loading: true, error: null })
     try {
-      await api.putGeofence(geofenceId, geometry)
+      await api.putGeofence(fullId, geometry)
       await get().fetchGeofences()
       set({ phase: 'idle', draft: null })
     } catch (e) {
@@ -85,19 +99,19 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
   },
 
   startEdit: (geofence) => {
+    const { trackerName } = parseGeofenceId(geofence.GeofenceId)
     set({
       phase: 'editing',
       draft: {
         geofenceId: geofence.GeofenceId,
+        trackerName,
         mode: 'Circle' in geofence.Geometry ? 'circle' : 'polygon',
         drawnFeature: null,
       },
     })
   },
 
-  cancelDraft: () => {
-    set({ phase: 'idle', draft: null })
-  },
+  cancelDraft: () => { set({ phase: 'idle', draft: null }) },
 
   deleteGeofence: async (geofenceId) => {
     set({ loading: true, error: null })
@@ -114,29 +128,51 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
   },
 
   toggleGeofenceVisibility: (geofenceId) => {
-    set((state) => {
-      const nextHidden = {
-        ...state.hiddenGeofences,
-        [geofenceId]: !state.hiddenGeofences[geofenceId],
-      }
+    set(state => {
+      const nextHidden = { ...state.hiddenGeofences, [geofenceId]: !state.hiddenGeofences[geofenceId] }
       saveHiddenGeofences(nextHidden)
       return { hiddenGeofences: nextHidden }
     })
   },
+
+  // Migra una geocerca sin prefijo: la recrea con prefijo y borra la original
+  migrateGeofence: async (oldId, trackerName) => {
+    const geofence = get().geofences.find(g => g.GeofenceId === oldId)
+    if (!geofence) return
+    set({ loading: true, error: null })
+    try {
+      const newId = buildGeofenceId(trackerName, oldId)
+      await api.putGeofence(newId, geofence.Geometry)
+      await api.deleteGeofence(oldId)
+      await get().fetchGeofences()
+    } catch (e) {
+      set({ loading: false, error: (e as Error).message })
+    }
+  },
 }))
+
+// AWS Location Service requiere orientación counter-clockwise (CCW).
+// Fórmula del shoelace: área > 0 → CCW (correcto), área < 0 → CW (invertir).
+function shoelaceArea(ring: number[][]): number {
+  let area = 0
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    area += (ring[j][0] + ring[i][0]) * (ring[j][1] - ring[i][1])
+  }
+  return area
+}
+
+function ensureCCW(ring: number[][]): number[][] {
+  return shoelaceArea(ring) > 0 ? ring : [...ring].reverse()
+}
 
 function featureToGeometry(feature: GeoJSON.Feature): GeofenceGeometry {
   const props = feature.properties ?? {}
-
   if (props.isCircle && props.center && props.radiusInKm) {
-    return {
-      Circle: {
-        Center: props.center as [number, number],
-        Radius: props.radiusInKm * 1000,
-      },
-    }
+    return { Circle: { Center: props.center as [number, number], Radius: props.radiusInKm * 1000 } }
   }
-
-  const geom = feature.geometry as GeoJSON.Polygon
-  return { Polygon: geom.coordinates as number[][][] }
+  const geom  = feature.geometry as GeoJSON.Polygon
+  const rings = geom.coordinates as number[][][]
+  // Anillo exterior siempre CCW, huecos internos CW (invertido)
+  const fixed = rings.map((ring, i) => i === 0 ? ensureCCW(ring) : ensureCCW(ring).reverse())
+  return { Polygon: fixed }
 }

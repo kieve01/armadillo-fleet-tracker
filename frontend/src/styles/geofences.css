@@ -1,3 +1,7 @@
+/* ══════════════════════════════════════════════════
+   GEOCERCAS — Rediseño completo
+   ══════════════════════════════════════════════════ */
+
 .geofence-panel {
   display: flex;
   flex-direction: column;
@@ -5,57 +9,333 @@
   overflow: hidden;
 }
 
-.geofence-panel__toolbar {
+/* ── Header ─────────────────────────────────────── */
+.gp-header {
+  padding: 10px 10px 8px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gp-header__row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 12px 12px 0;
+}
+
+.gp-header__row--create {
+  gap: 6px;
+}
+
+/* ── Type toggle (Polígono / Círculo) ────────────── */
+.gp-type-toggle {
+  display: flex;
+  gap: 2px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 7px;
+  padding: 2px;
+}
+
+.gp-type-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(0,0,0,0.45);
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+}
+
+.gp-type-btn:hover {
+  color: rgba(0,0,0,0.7);
+}
+
+.gp-type-btn--active {
+  background: #fff;
+  color: #00418b;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+/* ── Tracker dot (small color indicator) ────────── */
+.gp-tracker-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+/* ── Single tracker display ─────────────────────── */
+.gp-single-tracker {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(0,0,0,0.1);
+  background: rgba(0,0,0,0.02);
+}
+
+/* ── Drawing state banner ───────────────────────── */
+.gp-drawing-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(34,197,94,0.07);
+  border: 1px solid rgba(34,197,94,0.2);
+}
+
+.gp-drawing-state__indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.gp-drawing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e;
+  flex-shrink: 0;
+  animation: gp-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes gp-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+  50%       { box-shadow: 0 0 0 5px rgba(34,197,94,0);  }
+}
+
+.gp-cancel-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  color: rgba(0,0,0,0.45);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: inherit;
+  transition: background 0.13s, color 0.13s;
   flex-shrink: 0;
 }
 
+.gp-cancel-btn:hover {
+  background: rgba(0,0,0,0.06);
+  color: rgba(0,0,0,0.7);
+}
+
+.gp-cancel-btn kbd {
+  display: inline-block;
+  padding: 0px 4px;
+  border: 1px solid rgba(0,0,0,0.2);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: inherit;
+  margin-right: 3px;
+  background: rgba(0,0,0,0.04);
+}
+
+/* ── List ───────────────────────────────────────── */
 .geofence-panel__list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 0 8px;
+  padding: 4px 8px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128,128,128,0.2) transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
+.geofence-panel__list::-webkit-scrollbar { width: 4px; }
+.geofence-panel__list::-webkit-scrollbar-track { background: transparent; }
+.geofence-panel__list::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.2); border-radius: 99px; }
 
 .geofence-panel__loading,
 .geofence-panel__empty {
   display: flex;
   justify-content: center;
-  padding: 24px 0;
+  padding: 32px 0;
 }
 
-.geofence-list-item {
+/* ── Tracker group ───────────────────────────────── */
+.gp-tracker-group {
+  border-radius: 10px;
+  border: 1px solid rgba(0,0,0,0.07);
+  overflow: hidden;
+}
+
+.gp-tracker-group--warning {
+  border-color: rgba(217,119,6,0.25);
+}
+
+/* ── Tracker header ──────────────────────────────── */
+.gp-tracker-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  transition: background 0.15s;
+  gap: 7px;
+  padding: 8px 10px;
+  background: rgba(0,0,0,0.02);
   cursor: pointer;
+  user-select: none;
+  transition: background 0.13s;
 }
 
-.geofence-list-item:hover {
-  background: rgba(0, 0, 0, 0.03);
+.gp-tracker-header:hover {
+  background: rgba(0,0,0,0.04);
 }
 
-.geofence-list-item--hidden {
-  opacity: 0.5;
-}
-
-.geofence-list-item__icon {
-  font-size: 16px;
-  color: #00418b;
+.gp-tracker-header__chevron {
+  font-size: 10px;
+  color: rgba(0,0,0,0.3);
+  width: 12px;
   flex-shrink: 0;
 }
 
-.geofence-list-item__info {
+.gp-tracker-header__name {
   flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gp-tracker-header__count {
+  font-size: 11px;
+  color: rgba(128,128,128,0.6);
+  background: rgba(0,0,0,0.05);
+  border-radius: 99px;
+  padding: 0 7px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.gp-tracker-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+/* ── Tracker body ────────────────────────────────── */
+.gp-tracker-body {
+  padding: 4px;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  gap: 1px;
 }
+
+.gp-empty-group {
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Geofence item ───────────────────────────────── */
+.gp-fence-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border-radius: 7px;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  transition: background 0.13s;
+  position: relative;
+}
+
+.gp-fence-item:hover {
+  background: rgba(0,0,0,0.04);
+}
+
+.gp-fence-item--hidden {
+  opacity: 0.4;
+}
+
+.gp-fence-item__shape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: currentColor;
+  flex-shrink: 0;
+  opacity: 0.12;
+  position: relative;
+}
+
+/* Override: icon is inside the colored bg span */
+.gp-fence-item__shape > svg {
+  position: absolute;
+  opacity: calc(1 / 0.12);
+  color: inherit;
+}
+
+.gp-fence-item__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Actions: hidden by default, show on hover */
+.gp-fence-item__actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity 0.13s;
+  flex-shrink: 0;
+}
+
+.gp-fence-item:hover .gp-fence-item__actions {
+  opacity: 1;
+}
+
+/* ── Icon button (shared) ────────────────────────── */
+.gp-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  border-radius: 5px;
+  color: rgba(128,128,128,0.7);
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+  font-family: inherit;
+}
+
+.gp-icon-btn:hover {
+  background: rgba(0,0,0,0.06);
+  color: rgba(0,0,0,0.75);
+}
+
+.gp-icon-btn--danger:hover {
+  background: rgba(239,68,68,0.08);
+  color: #ef4444;
+}
+
 
 /* ── Vehicles panel ───────────────────────────────── */
 .vehicle-panel {
@@ -236,11 +516,11 @@
 }
 
 /* ── Sort toggle ──────────────────────────────────── */
-.vehicle-sort-toggle {
+.vehicle-sort-bar {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex-shrink: 0;
+  padding: 3px 2px 5px;
 }
 
 .vehicle-sort-btn {
@@ -285,6 +565,11 @@
   box-shadow: 0 0 0 2px rgba(34,197,94,0.2);
 }
 
+.vehicle-status-dot--offline {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239,68,68,0.2);
+}
+
 /* ── Dark mode ────────────────────────────────────── */
 [data-theme="dark"] .tracker-group { border-color: rgba(255,255,255,0.07); }
 [data-theme="dark"] .tracker-group__header { background: rgba(255,255,255,0.025); }
@@ -305,3 +590,28 @@
 
 /* MapboxDraw toolbar hidden */
 .mapboxgl-ctrl-group .mapbox-gl-draw_ctrl-draw-btn { display: none; }
+
+[data-theme="dark"] .geofence-list-item:hover { background: rgba(255,255,255,0.05); }
+[data-theme="dark"] .geofence-unassigned-group { border-color: rgba(217,119,6,0.3) !important; }
+[data-theme="dark"] .geofence-unassigned-group .tracker-group__header { background: rgba(217,119,6,0.08) !important; }
+
+/* ── Dark mode — Geocercas ───────────────────────── */
+[data-theme="dark"] .gp-type-toggle { background: rgba(255,255,255,0.06); }
+[data-theme="dark"] .gp-type-btn { color: rgba(255,255,255,0.35); }
+[data-theme="dark"] .gp-type-btn:hover { color: rgba(255,255,255,0.65); }
+[data-theme="dark"] .gp-type-btn--active { background: rgba(255,255,255,0.1); color: #4a9fd4; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+[data-theme="dark"] .gp-single-tracker { border-color: rgba(255,255,255,0.1); background: rgba(255,255,255,0.04); }
+[data-theme="dark"] .gp-drawing-state { background: rgba(34,197,94,0.09); border-color: rgba(34,197,94,0.22); }
+[data-theme="dark"] .gp-cancel-btn { color: rgba(255,255,255,0.4); }
+[data-theme="dark"] .gp-cancel-btn:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7); }
+[data-theme="dark"] .gp-cancel-btn kbd { border-color: rgba(255,255,255,0.15); background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.5); }
+[data-theme="dark"] .gp-tracker-group { border-color: rgba(255,255,255,0.07); }
+[data-theme="dark"] .gp-tracker-group--warning { border-color: rgba(217,119,6,0.3); }
+[data-theme="dark"] .gp-tracker-header { background: rgba(255,255,255,0.025); }
+[data-theme="dark"] .gp-tracker-header:hover { background: rgba(255,255,255,0.05); }
+[data-theme="dark"] .gp-tracker-header__chevron { color: rgba(255,255,255,0.3); }
+[data-theme="dark"] .gp-tracker-header__count { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.4); }
+[data-theme="dark"] .gp-fence-item:hover { background: rgba(255,255,255,0.05); }
+[data-theme="dark"] .gp-icon-btn { color: rgba(255,255,255,0.4); }
+[data-theme="dark"] .gp-icon-btn:hover { background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.8); }
+[data-theme="dark"] .gp-icon-btn--danger:hover { background: rgba(239,68,68,0.12); color: #f87171; }

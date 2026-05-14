@@ -215,7 +215,49 @@ class MapTypeControl implements maplibregl.IControl {
   onRemove() { this.unsub?.(); this.container?.remove() }
 }
 
-// ── FitFleetControl — encuadra flota + resetea bearing y pitch ───────────────
+// ── ArmadilloNavControl — NavigationControl nativo + brújula interceptada ────
+// Monta el NavigationControl nativo de MapLibre para mantener el estilo original,
+// luego reemplaza el listener de la brújula para cancelar follow + resetear norte.
+class ArmadilloNavControl implements maplibregl.IControl {
+  private map?: maplibregl.Map
+  private navControl: maplibregl.NavigationControl
+  private compassClickHandler?: (e: MouseEvent) => void
+
+  constructor() {
+    this.navControl = new maplibregl.NavigationControl({ visualizePitch: false })
+  }
+
+  onAdd(map: maplibregl.Map): HTMLElement {
+    this.map = map
+    const container = this.navControl.onAdd(map)
+
+    // Esperar al siguiente tick para que MapLibre termine de montar el control
+    setTimeout(() => {
+      const compassBtn = container.querySelector('.maplibregl-ctrl-compass') as HTMLButtonElement | null
+      if (!compassBtn) return
+
+      // Clonar el botón para eliminar el listener nativo de MapLibre
+      const newBtn = compassBtn.cloneNode(true) as HTMLButtonElement
+      compassBtn.parentNode?.replaceChild(newBtn, compassBtn)
+
+      this.compassClickHandler = () => {
+        if (!this.map) return
+        useVehiclesStore.getState().setFollow(null, null, 'none')
+        this.map.easeTo({ bearing: 0, pitch: 0, duration: 400 })
+      }
+      newBtn.addEventListener('click', this.compassClickHandler)
+    }, 0)
+
+    return container
+  }
+
+  onRemove() {
+    this.navControl.onRemove()
+    this.map = undefined
+  }
+}
+
+// ── FitFleetControl — encuadra flota en Lima + cancela follow completamente ───
 class FitFleetControl implements maplibregl.IControl {
   private map?: maplibregl.Map
   private container?: HTMLDivElement
@@ -228,14 +270,13 @@ class FitFleetControl implements maplibregl.IControl {
 
     const btn = document.createElement('button')
     btn.className = 'maplibregl-ctrl-icon armadillo-ctrl-btn'
-    btn.title = 'Encuadrar flota y restablecer orientación'
+    btn.title = 'Ver toda la flota en Lima'
     btn.innerHTML = SVG.fitFleet
     btn.addEventListener('click', () => {
       if (!this.map) return
 
-      // Exit navigation follow mode if active
-      const { followMode, setFollowMode } = useVehiclesStore.getState()
-      if (followMode === 'navigation') setFollowMode('overview')
+      // Cancela follow completamente
+      useVehiclesStore.getState().setFollow(null, null, 'none')
 
       const devices = useVehiclesStore.getState().devices
       const lima = devices.filter(d =>
@@ -245,8 +286,7 @@ class FitFleetControl implements maplibregl.IControl {
       const targets = lima.length ? lima : devices
 
       if (!targets.length) {
-        // No devices — just reset orientation
-        this.map.easeTo({ bearing: 0, pitch: 0, duration: 400 })
+        this.map.flyTo({ center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, bearing: 0, pitch: 0 })
         return
       }
 
@@ -331,7 +371,7 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
       attributionControl: {},
     })
     ;(newMap as any).__styleUrl = styleUrl
-    newMap.addControl(new maplibregl.NavigationControl(), 'top-right')
+    newMap.addControl(new ArmadilloNavControl(), 'top-right')
     newMap.addControl(new FitFleetControl(), 'top-right')
     newMap.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
     newMap.addControl(new MapTypeControl(), 'bottom-right')

@@ -2,12 +2,41 @@ import { PlusOutlined, UndoOutlined, SaveOutlined, CalculatorOutlined } from '@a
 import { Alert, Button, Divider, Spin, Typography } from 'antd'
 import { useEffect } from 'react'
 import { useRoutesStore } from '../routesStore'
+import { useVehiclesStore } from '../../vehicles/vehiclesStore'
+import { useMapStore } from '../../../store/mapStore'
 import RouteFormModal from './RouteFormModal'
 import RouteListItem from './RouteListItem'
 import '../../../styles/routes.css'
 
-// El panel de calculador se abre a nivel de mapa, controlado desde aquí
-// a través del store para no romper el layout del sidebar
+const LIMA_CENTER: [number, number] = [-77.03, -12.06]
+const LIMA_ZOOM = 10
+
+function fitFleetAndClearFollow() {
+  useVehiclesStore.getState().setFollow(null, null, 'none')
+  const map = useMapStore.getState().map
+  if (!map) return
+  const devices = useVehiclesStore.getState().devices
+  const lima = devices.filter(d =>
+    d.lat >= -12.55 && d.lat <= -11.75 &&
+    d.lng >= -77.35 && d.lng <= -76.70
+  )
+  const targets = lima.length ? lima : devices
+  if (!targets.length) {
+    map.flyTo({ center: LIMA_CENTER, zoom: LIMA_ZOOM, bearing: 0, pitch: 0 })
+    return
+  }
+  const lngs = targets.map(d => d.lng)
+  const lats  = targets.map(d => d.lat)
+  if (targets.length === 1) {
+    map.flyTo({ center: [lngs[0], lats[0]], zoom: 14, bearing: 0, pitch: 0 })
+  } else {
+    map.fitBounds(
+      [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+      { padding: 80, maxZoom: 13, bearing: 0, pitch: 0 }
+    )
+  }
+}
+
 interface Props { onOpenCalculator: () => void }
 
 export default function RoutePanel({ onOpenCalculator }: Props) {
@@ -41,7 +70,7 @@ export default function RoutePanel({ onOpenCalculator }: Props) {
             <Button
               size="small"
               icon={<PlusOutlined />}
-              onClick={startDrawing}
+              onClick={() => { fitFleetAndClearFollow(); startDrawing() }}
               style={{ flex: 1 }}
             >
               Trazar ruta
@@ -50,7 +79,7 @@ export default function RoutePanel({ onOpenCalculator }: Props) {
               size="small"
               type="primary"
               icon={<CalculatorOutlined />}
-              onClick={onOpenCalculator}
+              onClick={() => { fitFleetAndClearFollow(); onOpenCalculator() }}
               style={{ flex: 1 }}
             >
               Calcular ruta
