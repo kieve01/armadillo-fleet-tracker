@@ -60,7 +60,11 @@ VITE_MAP_API_KEY=$MapApiKey
     Write-Host "  frontend\.env.local ya existe, no se sobreescribe" -ForegroundColor Yellow
 }
 
+Write-Host "Instalando dependencias..." -ForegroundColor Cyan
+npm install
+npm install --prefix backend
+npm install --prefix frontend
+Write-Host "  Dependencias instaladas." -ForegroundColor Green
 Write-Host ""
 Write-Host "Listo. Para correr el proyecto:" -ForegroundColor Cyan
-Write-Host "  Terminal 1: cd backend  && npm install && npm run dev" -ForegroundColor White
-Write-Host "  Terminal 2: cd frontend && npm install && npm run dev" -ForegroundColor White
+Write-Host "  npm run dev" -ForegroundColor White
