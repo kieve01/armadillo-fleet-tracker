@@ -50,19 +50,40 @@ function decodePolyline(encoded: string): [number, number][] {
   return coords
 }
 
+// Obtiene el tiempo real desde worldtimeapi.org para evitar drift del reloj ECS.
+// El reloj del contenedor Fargate puede estar atrasado varios minutos; Google Routes
+// rechaza departureTime en el pasado con INVALID_ARGUMENT. Al obtener el tiempo de
+// un servidor externo y agregarle 30s de margen, siempre mandamos un timestamp futuro válido.
+async function getTrueNow(): Promise<string> {
+  try {
+    const r = await fetch('https://worldtimeapi.org/api/timezone/America/Lima', {
+      signal: AbortSignal.timeout(2000),
+    })
+    if (r.ok) {
+      const d: any = await r.json()
+      if (d?.unixtime) {
+        return new Date((d.unixtime + 30) * 1000).toISOString()
+      }
+    }
+  } catch { /* fallback abajo */ }
+  // Fallback: Date.now() + 5 min por si el tiempo externo no responde
+  return new Date(Date.now() + 5 * 60 * 1000).toISOString()
+}
+
 async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   const origin      = input.waypoints[0]
   const destination = input.waypoints[input.waypoints.length - 1]
   const maxAlts     = Math.min((input.maxAlternatives ?? 3) - 1, 2)
 
-  // Sin departureTime: Google lo toma como "ahora" usando su propio reloj (doc oficial).
-  // Evita el error INVALID_ARGUMENT por cualquier skew del reloj del contenedor ECS.
-  // TRAFFIC_AWARE_OPTIMAL + TRAFFIC_ON_POLYLINE funcionan igual sin este campo.
+  // departureTime desde servidor externo para evitar drift del reloj ECS.
+  const departureTimeISO = await getTrueNow()
+
   const body: any = {
     origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
     destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
     travelMode:              input.travelMode === 'Walking' ? 'WALK' : 'DRIVE',
     routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
+    departureTime:           departureTimeISO,
     computeAlternativeRoutes: maxAlts > 0,
     extraComputations:       ['TRAFFIC_ON_POLYLINE'],
     polylineQuality:         'HIGH_QUALITY',
@@ -306,6 +327,7 @@ export function registerRouteRoutes(app: Express): void {
           destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
           travelMode:              'DRIVE',
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
+          departureTime:           await getTrueNow(),
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
           polylineQuality:         'HIGH_QUALITY',
