@@ -42,18 +42,20 @@ function MigrateModal({ geofence, trackers, onConfirm, onCancel }: {
 }
 
 export default function GeofencePanel() {
-  const geofences              = useGeofencesStore(s => s.geofences)
-  const loading                = useGeofencesStore(s => s.loading)
-  const error                  = useGeofencesStore(s => s.error)
-  const phase                  = useGeofencesStore(s => s.phase)
-  const draft                  = useGeofencesStore(s => s.draft)
-  const hiddenGeofences        = useGeofencesStore(s => s.hiddenGeofences)
-  const fetchGeofences         = useGeofencesStore(s => s.fetchGeofences)
-  const startCreate            = useGeofencesStore(s => s.startCreate)
-  const startEdit              = useGeofencesStore(s => s.startEdit)
-  const cancelDraft            = useGeofencesStore(s => s.cancelDraft)
+  const geofences                = useGeofencesStore(s => s.geofences)
+  const loading                  = useGeofencesStore(s => s.loading)
+  const error                    = useGeofencesStore(s => s.error)
+  const phase                    = useGeofencesStore(s => s.phase)
+  const draft                    = useGeofencesStore(s => s.draft)
+  const hiddenGeofences          = useGeofencesStore(s => s.hiddenGeofences)
+  const fetchGeofences           = useGeofencesStore(s => s.fetchGeofences)
+  const startCreate              = useGeofencesStore(s => s.startCreate)
+  const startEdit                = useGeofencesStore(s => s.startEdit)
+  const cancelDraft              = useGeofencesStore(s => s.cancelDraft)
   const toggleGeofenceVisibility = useGeofencesStore(s => s.toggleGeofenceVisibility)
-  const migrateGeofence        = useGeofencesStore(s => s.migrateGeofence)
+  // FIX 1: acción que propaga ocultar/mostrar al store (y por tanto al mapa)
+  const toggleTrackerVisibility  = useGeofencesStore(s => s.toggleTrackerVisibility)
+  const migrateGeofence          = useGeofencesStore(s => s.migrateGeofence)
 
   const trackerResources = useVehiclesStore(s => s.trackerResources)
   const trackerNames     = trackerResources.map(t => t.trackerName)
@@ -61,7 +63,6 @@ export default function GeofencePanel() {
   const [selectedTracker, setSelectedTracker]     = useState<string>('')
   const [drawMode, setDrawMode]                   = useState<'polygon' | 'circle'>('polygon')
   const [collapsedTrackers, setCollapsedTrackers] = useState<Record<string, boolean>>({})
-  const [hiddenTrackers, setHiddenTrackers]       = useState<Record<string, boolean>>({})
   const [migrateTarget, setMigrateTarget]         = useState<Geofence | null>(null)
 
   useEffect(() => {
@@ -89,6 +90,19 @@ export default function GeofencePanel() {
     const { trackerName } = parseGeofenceId(g.GeofenceId)
     if (!byTracker[trackerName]) byTracker[trackerName] = []
     byTracker[trackerName].push(g)
+  }
+
+  // Determina si todas las geocercas de un tracker están ocultas en el store.
+  const isTrackerHidden = (tn: string): boolean => {
+    const ids = (byTracker[tn] ?? []).map(g => g.GeofenceId)
+    return ids.length > 0 && ids.every(id => !!hiddenGeofences[id])
+  }
+
+  const handleToggleTracker = (tn: string) => {
+    const ids = (byTracker[tn] ?? []).map(g => g.GeofenceId)
+    if (!ids.length) return
+    // Si ya están todos ocultos → mostrar; si no → ocultar
+    toggleTrackerVisibility(ids, !isTrackerHidden(tn))
   }
 
   return (
@@ -197,7 +211,8 @@ export default function GeofencePanel() {
             {trackerNames.map(tn => {
               const tGeofences  = byTracker[tn] ?? []
               const isCollapsed = !!collapsedTrackers[tn]
-              const isHiddenT   = !!hiddenTrackers[tn]
+              // FIX 1: derivado del store, no de estado local
+              const isHiddenT   = isTrackerHidden(tn)
               const color       = colorFromTracker(tn)
 
               return (
@@ -217,7 +232,7 @@ export default function GeofencePanel() {
                       <Tooltip title={isHiddenT ? 'Mostrar en mapa' : 'Ocultar en mapa'} mouseEnterDelay={0.4}>
                         <button
                           className="gp-icon-btn"
-                          onClick={() => setHiddenTrackers(p => ({ ...p, [tn]: !p[tn] }))}
+                          onClick={() => handleToggleTracker(tn)}
                         >
                           {isHiddenT ? <EyeInvisibleOutlined /> : <EyeOutlined />}
                         </button>
@@ -240,7 +255,7 @@ export default function GeofencePanel() {
                           geofence={g}
                           trackerColor={color}
                           onEdit={startEdit}
-                          isHidden={!!hiddenGeofences[g.GeofenceId] || isHiddenT}
+                          isHidden={!!hiddenGeofences[g.GeofenceId]}
                           onToggleVisibility={toggleGeofenceVisibility}
                         />
                       ))}

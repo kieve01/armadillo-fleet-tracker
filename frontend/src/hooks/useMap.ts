@@ -5,7 +5,7 @@ import { buildStyleUrl } from '../components/map/mapHelpers'
 import { useMapStore } from '../store/mapStore'
 import { useUIStore } from '../store/uiStore'
 import { useVehiclesStore } from '../features/vehicles/vehiclesStore'
-import { getAnimatedPosition } from '../features/vehicles/useVehicleLayers'
+import { getAnimatedPosition, setFollowCallback, setFollowKey } from '../features/vehicles/useVehicleLayers'
 
 const DEFAULT_CENTER: [number, number] = [-77.03, -12.06]
 const DEFAULT_ZOOM = 10
@@ -326,6 +326,40 @@ function useFollowVehicle(map: maplibregl.Map | null) {
   const followTrackerName = useVehiclesStore(s => s.followTrackerName)
   const devices           = useVehiclesStore(s => s.devices)
 
+  // ── Registrar/desregistrar el callback de follow en el módulo de capas ────
+  // Cuando followMode cambia a activo, registramos un callback que el RAF tick
+  // de useVehicleLayers invocará frame a frame con la posición animada exacta.
+  // Así la cámara se mueve en sincronía con el marcador, sin saltos periódicos.
+  useEffect(() => {
+    if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) {
+      setFollowKey(null)
+      setFollowCallback(null)
+      return
+    }
+
+    const key = `${followTrackerName}/${selectedDeviceId}`
+    setFollowKey(key)
+
+    if (followMode === 'overview') {
+      setFollowCallback((lat, lng, _heading) => {
+        map.jumpTo({ center: [lng, lat] })
+      })
+    } else {
+      // navigation / sky: rotar bearing con el heading del vehículo
+      setFollowCallback((lat, lng, heading) => {
+        map.jumpTo({ center: [lng, lat], bearing: heading })
+      })
+    }
+
+    return () => {
+      setFollowKey(null)
+      setFollowCallback(null)
+    }
+  }, [map, followMode, selectedDeviceId, followTrackerName])
+
+  // ── Encuadre inicial al activar follow ────────────────────────────────────
+  // Solo al montar/cambiar modo: posiciona zoom, pitch y offset una sola vez.
+  // El seguimiento continuo queda a cargo del RAF callback registrado arriba.
   useEffect(() => {
     if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
 
@@ -340,16 +374,19 @@ function useFollowVehicle(map: maplibregl.Map | null) {
     const heading  = animated?.heading ?? device.heading ?? 0
 
     if (followMode === 'overview') {
-      map.easeTo({ center: [lng, lat], zoom: 15, bearing: 0, pitch: 0, duration: 800 })
+      map.easeTo({ center: [lng, lat], zoom: 15, bearing: 0, pitch: 0, duration: 600 })
     } else if (followMode === 'navigation') {
       map.easeTo({
         center: [lng, lat], zoom: 18,
         bearing: heading, pitch: 60,
-        duration: 800,
+        duration: 600,
         offset: [0, 80],
       })
     }
-  }, [map, followMode, selectedDeviceId, followTrackerName, devices])
+  // Intencionalmente no incluye `devices` — este efecto solo corre al cambiar
+  // de modo. El seguimiento continuo lo maneja el RAF callback.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, followMode, selectedDeviceId, followTrackerName])
 }
 
 // ── useMap ───────────────────────────────────────────────────────────────────

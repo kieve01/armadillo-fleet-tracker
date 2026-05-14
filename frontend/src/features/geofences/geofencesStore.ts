@@ -51,6 +51,7 @@ interface GeofencesState {
   cancelDraft: () => void
   deleteGeofence: (geofenceId: string) => Promise<void>
   toggleGeofenceVisibility: (geofenceId: string) => void
+  toggleTrackerVisibility: (geofenceIds: string[], hidden: boolean) => void
   migrateGeofence: (oldId: string, trackerName: string) => Promise<void>
 }
 
@@ -91,6 +92,15 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       await api.putGeofence(fullId, geometry)
+      // Si es edición y el nombre cambió, elimina la geocerca con el id anterior
+      if (draft.geofenceId && draft.geofenceId !== fullId) {
+        await api.deleteGeofence(draft.geofenceId)
+        // Limpia visibilidad del id anterior si existía
+        const nextHidden = { ...get().hiddenGeofences }
+        delete nextHidden[draft.geofenceId]
+        saveHiddenGeofences(nextHidden)
+        set({ hiddenGeofences: nextHidden })
+      }
       await get().fetchGeofences()
       set({ phase: 'idle', draft: null })
     } catch (e) {
@@ -98,15 +108,19 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
     }
   },
 
+  // FIX 2: Preserva la geometría existente como drawnFeature para que
+  // confirmSave pueda reutilizarla cuando el usuario solo cambia el nombre.
   startEdit: (geofence) => {
     const { trackerName } = parseGeofenceId(geofence.GeofenceId)
+    const mode: DrawMode = 'Circle' in geofence.Geometry ? 'circle' : 'polygon'
+    const drawnFeature = geometryToFeature(geofence.Geometry)
     set({
       phase: 'editing',
       draft: {
         geofenceId: geofence.GeofenceId,
         trackerName,
-        mode: 'Circle' in geofence.Geometry ? 'circle' : 'polygon',
-        drawnFeature: null,
+        mode,
+        drawnFeature,
       },
     })
   },
@@ -135,6 +149,22 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
     })
   },
 
+  // FIX 1: Ocultar/mostrar todas las geocercas de un tracker de una vez.
+  toggleTrackerVisibility: (geofenceIds, hidden) => {
+    set(state => {
+      const nextHidden = { ...state.hiddenGeofences }
+      for (const id of geofenceIds) {
+        if (hidden) {
+          nextHidden[id] = true
+        } else {
+          delete nextHidden[id]
+        }
+      }
+      saveHiddenGeofences(nextHidden)
+      return { hiddenGeofences: nextHidden }
+    })
+  },
+
   // Migra una geocerca sin prefijo: la recrea con prefijo y borra la original
   migrateGeofence: async (oldId, trackerName) => {
     const geofence = get().geofences.find(g => g.GeofenceId === oldId)
@@ -151,8 +181,12 @@ export const useGeofencesStore = create<GeofencesState>((set, get) => ({
   },
 }))
 
-// AWS Location Service requiere orientación counter-clockwise (CCW).
-// Fórmula del shoelace: área > 0 → CCW (correcto), área < 0 → CW (invertir).
+// ── Geometría ─────────────────────────────────────────────────────────────────
+
+// FIX 3: Shoelace corregido para GeoJSON [lon, lat].
+// Según RFC 7946 y AWS Location Service, el anillo exterior debe ser CCW.
+// Con la fórmula estándar del shoelace sobre coordenadas [x=lon, y=lat],
+// un resultado negativo indica CCW (sentido antihorario).
 function shoelaceArea(ring: number[][]): number {
   let area = 0
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -162,7 +196,8 @@ function shoelaceArea(ring: number[][]): number {
 }
 
 function ensureCCW(ring: number[][]): number[][] {
-  return shoelaceArea(ring) > 0 ? ring : [...ring].reverse()
+  // área < 0 → CCW en GeoJSON; área > 0 → CW → invertir
+  return shoelaceArea(ring) < 0 ? ring : [...ring].reverse()
 }
 
 function featureToGeometry(feature: GeoJSON.Feature): GeofenceGeometry {
@@ -175,4 +210,26 @@ function featureToGeometry(feature: GeoJSON.Feature): GeofenceGeometry {
   // Anillo exterior siempre CCW, huecos internos CW (invertido)
   const fixed = rings.map((ring, i) => i === 0 ? ensureCCW(ring) : ensureCCW(ring).reverse())
   return { Polygon: fixed }
+}
+
+// Convierte la geometría almacenada en AWS de vuelta a GeoJSON Feature,
+// necesario para que startEdit pueda rellenar drawnFeature.
+function geometryToFeature(geometry: GeofenceGeometry): GeoJSON.Feature {
+  if ('Circle' in geometry) {
+    const { Center, Radius } = geometry.Circle
+    return {
+      type: 'Feature',
+      properties: {
+        isCircle: true,
+        center: Center,
+        radiusInKm: Radius / 1000,
+      },
+      geometry: { type: 'Point', coordinates: Center },
+    }
+  }
+  return {
+    type: 'Feature',
+    properties: {},
+    geometry: { type: 'Polygon', coordinates: geometry.Polygon },
+  }
 }

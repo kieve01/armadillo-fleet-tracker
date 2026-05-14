@@ -47,7 +47,6 @@ interface AnimState {
 interface AnimPos { lat: number; lng: number; heading: number }
 
 // ─── Constantes ──────────────────────────────────────────────────────────────
-// Si el nuevo punto está a más de esta distancia, teleportar directamente
 const MAX_ANIM_DISTANCE_M = 500
 
 function easeOut(t: number): number { return 1 - Math.pow(1 - Math.min(t, 1), 3) }
@@ -69,11 +68,29 @@ function resolveWsUrl(): string | null {
   return (import.meta.env.VITE_WS_URL as string | undefined) ?? null
 }
 
-// ─── Estado de módulo — posición animada accesible desde fuera ───────────────
+// ─── Estado de módulo ─────────────────────────────────────────────────────────
 let _animPosMap = new Map<string, AnimPos>()
 
 export function getAnimatedPosition(trackerName: string, deviceId: string): AnimPos | undefined {
   return _animPosMap.get(`${trackerName}/${deviceId}`)
+}
+
+// ─── Follow callback ──────────────────────────────────────────────────────────
+// Registrado por useMap; invocado en cada tick del RAF con la posición animada
+// del vehículo seguido. Así la cámara se mueve frame a frame junto al marcador,
+// sin depender del ciclo de actualización del store (que llega cada ~15 s).
+type FollowCallback = (lat: number, lng: number, heading: number) => void
+let _followCallback: FollowCallback | null = null
+
+export function setFollowCallback(cb: FollowCallback | null): void {
+  _followCallback = cb
+}
+
+// Clave del vehículo actualmente seguido: "trackerName/deviceId" o null
+let _followKey: string | null = null
+
+export function setFollowKey(key: string | null): void {
+  _followKey = key
 }
 
 // ─── GeoJSON builder ─────────────────────────────────────────────────────────
@@ -169,7 +186,6 @@ export function useVehicleLayers() {
   const mapReadyRef  = useRef<boolean>(false)
   const lastUpdateAtRef = useRef<Map<string, string>>(new Map())
   const globalRafRef    = useRef<number | null>(null)
-  // true solo cuando la pestaña es visible Y el usuario la está viendo
   const isVisibleRef    = useRef<boolean>(document.visibilityState === 'visible')
 
   useEffect(() => { mapRef.current = map ?? null }, [map])
@@ -181,13 +197,13 @@ export function useVehicleLayers() {
     source?.setData(fcRef.current)
   }, [])
 
-  // ── RAF global: solo corre cuando la pestaña es visible ───────────────────
+  // ── RAF global ────────────────────────────────────────────────────────────
   const startGlobalRaf = useCallback(() => {
     if (globalRafRef.current || !isVisibleRef.current) return
 
     const tick = (now: number) => {
       globalRafRef.current = null
-      if (!isVisibleRef.current) return  // pestaña oculta — parar
+      if (!isVisibleRef.current) return
 
       let anyActive = false
       const features = [...fcRef.current.features]
@@ -196,7 +212,7 @@ export function useVehicleLayers() {
       animStateRef.current.forEach((state: AnimState, key: string) => {
         const elapsed = now - state.startTime
         const t       = elapsed / state.segmentMs
-        if (t >= 1) return  // terminada — quieto en destino
+        if (t >= 1) return
 
         const te      = easeOut(t)
         const lat     = state.fromLat + (state.toLat - state.fromLat) * te
@@ -205,6 +221,13 @@ export function useVehicleLayers() {
 
         animPosRef.current.set(key, { lat, lng, heading })
         anyActive = true
+
+        // ── Follow: mover la cámara frame a frame junto al marcador ─────────
+        // Se invoca aquí, dentro del RAF, para que la cámara sea perfectamente
+        // síncrona con la posición animada — no con el ciclo del store.
+        if (key === _followKey && _followCallback) {
+          _followCallback(lat, lng, heading)
+        }
 
         const [tracker, ...rest] = key.split('/')
         const deviceId = rest.join('/')
@@ -240,18 +263,9 @@ export function useVehicleLayers() {
       isVisibleRef.current = visible
 
       if (visible) {
-        // Volvemos a la pestaña:
-        // 1. Posicionar TODOS los marcadores en su última coordenada GPS real
-        //    (sin animar, sin recuperar tiempo acumulado)
-        // 2. Limpiar todas las animaciones pendientes
         animStateRef.current.clear()
-
-        // Reconstruir FC con posiciones del store (ya actualizadas por WS en background)
-        // El effect de devices se encargará del rebuild completo.
-        // Aquí solo forzamos flush inmediato.
         flushToMap()
       } else {
-        // Pestaña oculta: cancelar RAF — cero CPU en background
         if (globalRafRef.current) {
           cancelAnimationFrame(globalRafRef.current)
           globalRafRef.current = null
@@ -263,14 +277,13 @@ export function useVehicleLayers() {
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
   }, [flushToMap])
 
-  // ── Upsert: Kalman + animación solo si pestaña visible ────────────────────
+  // ── Upsert: Kalman + animación ────────────────────────────────────────────
   const wrappedUpsertRef = useRef<typeof upsertDevicePosition>((e) => upsertDevicePosition(e))
 
   useEffect(() => {
     wrappedUpsertRef.current = (event) => {
       const key = `${event.trackerName}/${event.deviceId}`
 
-      // Kalman
       let kf = kalmanRef.current.get(key)
       if (!kf) {
         kf = { lat: new KalmanFilter(), lng: new KalmanFilter() }
@@ -279,19 +292,16 @@ export function useVehicleLayers() {
       const fLat = kf.lat.filter(event.lat)
       const fLng = kf.lng.filter(event.lng)
 
-      // Intervalo dinámico
       const prevAt    = lastUpdateAtRef.current.get(key)
       const segmentMs = estimateInterval(prevAt, event.updatedAt)
       lastUpdateAtRef.current.set(key, event.updatedAt)
 
-      // Posición actual animada
       const cur     = animPosRef.current.get(key)
       const fromLat = cur?.lat     ?? fLat
       const fromLng = cur?.lng     ?? fLng
       const fromHdg = cur?.heading ?? event.heading ?? 0
       const toHdg   = event.heading ?? fromHdg
 
-      // Salto irreal → teleportar y resetear Kalman
       const distM = haversineM(fromLat, fromLng, fLat, fLng)
       if (distM > MAX_ANIM_DISTANCE_M) {
         kf.lat.reset(event.lat)
@@ -302,7 +312,6 @@ export function useVehicleLayers() {
         return
       }
 
-      // Pestaña oculta → no animar, actualizar posición directamente al punto real
       if (!isVisibleRef.current) {
         animPosRef.current.set(key, { lat: fLat, lng: fLng, heading: toHdg })
         animStateRef.current.delete(key)
@@ -310,7 +319,6 @@ export function useVehicleLayers() {
         return
       }
 
-      // Pestaña visible → animación suave
       animStateRef.current.set(key, {
         fromLat, fromLng, fromHeading: fromHdg,
         toLat: fLat, toLng: fLng, toHeading: toHdg,
@@ -366,7 +374,6 @@ export function useVehicleLayers() {
       socket.onerror = () => { socket?.close() }
     }
 
-    // Reconectar al volver a la pestaña si el socket se cayó
     const onVisible = () => {
       if (document.visibilityState === 'visible') {
         if (!socket || socket.readyState === WebSocket.CLOSED) {
