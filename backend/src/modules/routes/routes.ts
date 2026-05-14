@@ -55,19 +55,25 @@ function decodePolyline(encoded: string): [number, number][] {
 // rechaza departureTime en el pasado con INVALID_ARGUMENT. Al obtener el tiempo de
 // un servidor externo y agregarle 30s de margen, siempre mandamos un timestamp futuro válido.
 async function getTrueNow(): Promise<string> {
+  const fallback = new Date(Date.now() + 5 * 60 * 1000).toISOString()
   try {
     const r = await fetch('https://worldtimeapi.org/api/timezone/America/Lima', {
       signal: AbortSignal.timeout(2000),
     })
     if (r.ok) {
       const d: any = await r.json()
+      console.log('[getTrueNow] worldtimeapi unixtime:', d?.unixtime, '-> ISO:', d?.unixtime ? new Date((d.unixtime + 30) * 1000).toISOString() : 'N/A')
       if (d?.unixtime) {
         return new Date((d.unixtime + 30) * 1000).toISOString()
       }
+    } else {
+      console.log('[getTrueNow] worldtimeapi status:', r.status)
     }
-  } catch { /* fallback abajo */ }
-  // Fallback: Date.now() + 5 min por si el tiempo externo no responde
-  return new Date(Date.now() + 5 * 60 * 1000).toISOString()
+  } catch (e: any) {
+    console.log('[getTrueNow] worldtimeapi error:', e?.message)
+  }
+  console.log('[getTrueNow] using fallback Date.now():', fallback, '| Date.now() raw:', Date.now())
+  return fallback
 }
 
 async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
