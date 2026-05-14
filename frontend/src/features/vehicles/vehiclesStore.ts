@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import {
   listTrackerResources,
   createTrackerResource,
@@ -7,14 +8,13 @@ import {
   listDevices,
   updateDeviceLocation,
 } from './vehiclesService'
-import type { TrackerResource, Device } from './types'
+import type { TrackerResource, Device, TrackerMeta, DeviceGroup } from './types'
+
+export type FollowMode = 'none' | 'overview' | 'navigation'
 
 type Phase = 'idle' | 'placing'
 
-interface PendingLocation {
-  lat: number
-  lng: number
-}
+interface PendingLocation { lat: number; lng: number }
 
 interface DevicePositionEvent {
   trackerName: string
@@ -29,19 +29,34 @@ interface DevicePositionEvent {
 interface VehiclesState {
   trackerResources: TrackerResource[]
   devices: Device[]
+  trackerMeta: Record<string, TrackerMeta>
   loading: boolean
   error: string | null
   selectedDeviceId: string | null
+  followTrackerName: string | null
+  followMode: FollowMode
   phase: Phase
   pendingLocation: PendingLocation | null
   collapsedTrackers: Record<string, boolean>
+  collapsedGroups: Record<string, boolean>
   hiddenTrackers: Record<string, boolean>
+  hiddenGroups: Record<string, boolean>
   hiddenDevices: Record<string, boolean>
 
   fetchAll: () => Promise<void>
   createTracker: (trackerName: string, description?: string) => Promise<void>
   deleteTracker: (trackerName: string) => Promise<void>
   deleteDevice: (trackerName: string, deviceId: string) => Promise<void>
+
+  // Meta — stored in localStorage only
+  createGroup: (trackerName: string, groupName: string) => void
+  renameGroup: (trackerName: string, groupId: string, newName: string) => void
+  deleteGroup: (trackerName: string, groupId: string) => void
+  assignDeviceToGroup: (trackerName: string, deviceId: string, groupId: string | null) => void
+
+  // Follow
+  setFollow: (deviceId: string | null, trackerName: string | null, mode: FollowMode) => void
+  setFollowMode: (mode: FollowMode) => void
 
   startPlace: () => void
   setPendingLocation: (loc: PendingLocation) => void
@@ -51,141 +66,234 @@ interface VehiclesState {
   selectDevice: (id: string | null) => void
   upsertDevicePosition: (event: DevicePositionEvent) => void
   toggleTrackerCollapsed: (trackerName: string) => void
+  toggleGroupCollapsed: (trackerName: string, groupId: string) => void
   toggleTrackerVisibility: (trackerName: string) => void
+  toggleGroupVisibility: (trackerName: string, groupId: string) => void
   toggleDeviceVisibility: (trackerName: string, deviceId: string) => void
 }
 
-export const useVehiclesStore = create<VehiclesState>((set, get) => ({
-  trackerResources: [],
-  devices: [],
-  loading: false,
-  error: null,
-  selectedDeviceId: null,
-  phase: 'idle',
-  pendingLocation: null,
-  collapsedTrackers: {},
-  hiddenTrackers: {},
-  hiddenDevices: {},
+function generateGroupId(): string {
+  return `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+}
 
-  fetchAll: async () => {
-    set({ loading: true, error: null })
-    try {
-      const resources = await listTrackerResources()
-      const allDevices = (
-        await Promise.all(resources.map((r) => listDevices(r.trackerName).catch(() => [])))
-      ).flat()
-      set({ trackerResources: resources, devices: allDevices, loading: false })
-    } catch (e) {
-      set({ loading: false, error: (e as Error).message })
-    }
-  },
+function getMetaKey(trackerName: string): string {
+  return `armadillo.tracker_meta.${trackerName}`
+}
 
-  createTracker: async (trackerName, description) => {
-    set({ loading: true, error: null })
-    try {
-      await createTrackerResource(trackerName, description)
-      await get().fetchAll()
-    } catch (e) {
-      set({ loading: false, error: (e as Error).message })
-    }
-  },
+function loadMeta(trackerName: string): TrackerMeta {
+  try {
+    const raw = localStorage.getItem(getMetaKey(trackerName))
+    if (raw) return JSON.parse(raw) as TrackerMeta
+  } catch {}
+  return { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
+}
 
-  deleteTracker: async (trackerName) => {
-    set({ loading: true, error: null })
-    try {
-      await deleteTrackerResource(trackerName)
-      await get().fetchAll()
-    } catch (e) {
-      set({ loading: false, error: (e as Error).message })
-    }
-  },
+function saveMeta(meta: TrackerMeta): void {
+  try {
+    localStorage.setItem(getMetaKey(meta.trackerName), JSON.stringify(meta))
+  } catch {}
+}
 
-  deleteDevice: async (trackerName, deviceId) => {
-    set({ loading: true, error: null })
-    try {
-      await deleteDeviceResource(trackerName, deviceId)
-      await get().fetchAll()
-      if (get().selectedDeviceId === deviceId) {
-        set({ selectedDeviceId: null })
-      }
-    } catch (e) {
-      set({ loading: false, error: (e as Error).message })
-    }
-  },
+export const useVehiclesStore = create<VehiclesState>()(
+  persist(
+    (set, get) => ({
+      trackerResources: [],
+      devices: [],
+      trackerMeta: {},
+      loading: false,
+      error: null,
+      selectedDeviceId: null,
+      followTrackerName: null,
+      followMode: 'none',
+      phase: 'idle',
+      pendingLocation: null,
+      collapsedTrackers: {},
+      collapsedGroups: {},
+      hiddenTrackers: {},
+      hiddenGroups: {},
+      hiddenDevices: {},
 
-  startPlace: () => set({ phase: 'placing', pendingLocation: null, error: null }),
-
-  setPendingLocation: (loc) => set({ pendingLocation: loc }),
-
-  confirmPlaceDevice: async (trackerName, deviceId) => {
-    const { pendingLocation } = get()
-    if (!pendingLocation) return
-    set({ loading: true, error: null })
-    try {
-      await updateDeviceLocation(trackerName, deviceId, pendingLocation.lat, pendingLocation.lng)
-      await get().fetchAll()
-      set({ phase: 'idle', pendingLocation: null })
-    } catch (e) {
-      set({ loading: false, error: (e as Error).message })
-    }
-  },
-
-  cancelPlace: () => set({ phase: 'idle', pendingLocation: null, error: null }),
-
-  selectDevice: (id) => set({ selectedDeviceId: id }),
-
-  upsertDevicePosition: (event) => {
-    set((state) => {
-      const nextDevices = [...state.devices]
-      const index = nextDevices.findIndex(
-        (d) => d.deviceId === event.deviceId && d.trackerName === event.trackerName,
-      )
-
-      const device: Device = {
-        deviceId: event.deviceId,
-        trackerName: event.trackerName,
-        lat: event.lat,
-        lng: event.lng,
-        speed: event.speed,
-        heading: event.heading,
-        updatedAt: event.updatedAt,
-      }
-
-      if (index >= 0) {
-        nextDevices[index] = device
-      } else {
-        nextDevices.push(device)
-      }
-
-      return { devices: nextDevices }
-    })
-  },
-
-  toggleTrackerCollapsed: (trackerName) => {
-    set((state) => ({
-      collapsedTrackers: {
-        ...state.collapsedTrackers,
-        [trackerName]: !state.collapsedTrackers[trackerName],
+      fetchAll: async () => {
+        set({ loading: true, error: null })
+        try {
+          const resources = await listTrackerResources()
+          const allDevices = (
+            await Promise.all(resources.map((r) => listDevices(r.trackerName).catch(() => [])))
+          ).flat()
+          // Load meta from localStorage for each tracker
+          const trackerMeta: Record<string, TrackerMeta> = {}
+          for (const r of resources) {
+            trackerMeta[r.trackerName] = loadMeta(r.trackerName)
+          }
+          set({ trackerResources: resources, devices: allDevices, trackerMeta, loading: false })
+        } catch (e) {
+          set({ loading: false, error: (e as Error).message })
+        }
       },
-    }))
-  },
 
-  toggleTrackerVisibility: (trackerName) => {
-    set((state) => ({
-      hiddenTrackers: {
-        ...state.hiddenTrackers,
-        [trackerName]: !state.hiddenTrackers[trackerName],
+      createTracker: async (trackerName, description) => {
+        set({ loading: true, error: null })
+        try {
+          await createTrackerResource(trackerName, description)
+          await get().fetchAll()
+        } catch (e) {
+          set({ loading: false, error: (e as Error).message })
+        }
       },
-    }))
-  },
 
-  toggleDeviceVisibility: (trackerName, deviceId) => {
-    const key = `${trackerName}/${deviceId}`
-    set((state) => ({
-      hiddenDevices: {
-        ...state.hiddenDevices,
-        [key]: !state.hiddenDevices[key],
+      deleteTracker: async (trackerName) => {
+        set({ loading: true, error: null })
+        try {
+          await deleteTrackerResource(trackerName)
+          await get().fetchAll()
+        } catch (e) {
+          set({ loading: false, error: (e as Error).message })
+        }
       },
-    }))
-  },
-}))
+
+      deleteDevice: async (trackerName, deviceId) => {
+        set({ loading: true, error: null })
+        try {
+          await deleteDeviceResource(trackerName, deviceId)
+          await get().fetchAll()
+          if (get().selectedDeviceId === deviceId) set({ selectedDeviceId: null })
+        } catch (e) {
+          set({ loading: false, error: (e as Error).message })
+        }
+      },
+
+      // ── Meta (localStorage only) ──────────────────────────────────────────
+
+      createGroup: (trackerName, groupName) => {
+        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const newGroup: DeviceGroup = { id: generateGroupId(), name: groupName }
+        const updated: TrackerMeta = { ...current, groups: [...current.groups, newGroup] }
+        saveMeta(updated)
+        set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+      },
+
+      renameGroup: (trackerName, groupId, newName) => {
+        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const updated: TrackerMeta = {
+          ...current,
+          groups: current.groups.map((g) => g.id === groupId ? { ...g, name: newName } : g),
+        }
+        saveMeta(updated)
+        set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+      },
+
+      deleteGroup: (trackerName, groupId) => {
+        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const deviceGroups = { ...current.deviceGroups }
+        for (const [deviceId, gId] of Object.entries(deviceGroups)) {
+          if (gId === groupId) delete deviceGroups[deviceId]
+        }
+        const updated: TrackerMeta = {
+          ...current,
+          groups: current.groups.filter((g) => g.id !== groupId),
+          deviceGroups,
+        }
+        saveMeta(updated)
+        set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+      },
+
+      assignDeviceToGroup: (trackerName, deviceId, groupId) => {
+        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const deviceGroups = { ...current.deviceGroups }
+        if (groupId === null) delete deviceGroups[deviceId]
+        else deviceGroups[deviceId] = groupId
+        const updated: TrackerMeta = { ...current, deviceGroups }
+        saveMeta(updated)
+        set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+      },
+
+      // ── Follow ────────────────────────────────────────────────────────────
+
+      setFollow: (deviceId, trackerName, mode) => {
+        set({ selectedDeviceId: deviceId, followTrackerName: trackerName, followMode: mode })
+      },
+
+      setFollowMode: (mode) => set({ followMode: mode }),
+
+      // ── Place ─────────────────────────────────────────────────────────────
+
+      startPlace: () => set({ phase: 'placing', pendingLocation: null, error: null }),
+      setPendingLocation: (loc) => set({ pendingLocation: loc }),
+
+      confirmPlaceDevice: async (trackerName, deviceId) => {
+        const { pendingLocation } = get()
+        if (!pendingLocation) return
+        set({ loading: true, error: null })
+        try {
+          await updateDeviceLocation(trackerName, deviceId, pendingLocation.lat, pendingLocation.lng)
+          await get().fetchAll()
+          set({ phase: 'idle', pendingLocation: null })
+        } catch (e) {
+          set({ loading: false, error: (e as Error).message })
+        }
+      },
+
+      cancelPlace: () => set({ phase: 'idle', pendingLocation: null, error: null }),
+
+      selectDevice: (id) => set({ selectedDeviceId: id }),
+
+      upsertDevicePosition: (event) => {
+        set((state) => {
+          const nextDevices = [...state.devices]
+          const index = nextDevices.findIndex(
+            (d) => d.deviceId === event.deviceId && d.trackerName === event.trackerName,
+          )
+          const device: Device = {
+            deviceId: event.deviceId,
+            trackerName: event.trackerName,
+            lat: event.lat,
+            lng: event.lng,
+            speed: event.speed,
+            heading: event.heading,
+            updatedAt: event.updatedAt,
+          }
+          if (index >= 0) nextDevices[index] = device
+          else nextDevices.push(device)
+          return { devices: nextDevices }
+        })
+      },
+
+      toggleTrackerCollapsed: (trackerName) => {
+        set((s) => ({
+          collapsedTrackers: { ...s.collapsedTrackers, [trackerName]: !s.collapsedTrackers[trackerName] },
+        }))
+      },
+
+      toggleGroupCollapsed: (trackerName, groupId) => {
+        const key = `${trackerName}/${groupId}`
+        set((s) => ({ collapsedGroups: { ...s.collapsedGroups, [key]: !s.collapsedGroups[key] } }))
+      },
+
+      toggleTrackerVisibility: (trackerName) => {
+        set((s) => ({
+          hiddenTrackers: { ...s.hiddenTrackers, [trackerName]: !s.hiddenTrackers[trackerName] },
+        }))
+      },
+
+      toggleGroupVisibility: (trackerName, groupId) => {
+        const key = `${trackerName}/${groupId}`
+        set((s) => ({ hiddenGroups: { ...s.hiddenGroups, [key]: !s.hiddenGroups[key] } }))
+      },
+
+      toggleDeviceVisibility: (trackerName, deviceId) => {
+        const key = `${trackerName}/${deviceId}`
+        set((s) => ({ hiddenDevices: { ...s.hiddenDevices, [key]: !s.hiddenDevices[key] } }))
+      },
+    }),
+    {
+      name: 'armadillo-vehicles-ui',
+      partialize: (s) => ({
+        collapsedTrackers: s.collapsedTrackers,
+        collapsedGroups:   s.collapsedGroups,
+        hiddenTrackers:    s.hiddenTrackers,
+        hiddenGroups:      s.hiddenGroups,
+        hiddenDevices:     s.hiddenDevices,
+      }),
+    }
+  )
+)

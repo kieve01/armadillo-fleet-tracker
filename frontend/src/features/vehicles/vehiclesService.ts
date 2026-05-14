@@ -1,4 +1,4 @@
-import type { TrackerResource, Device } from './types'
+import type { TrackerResource, Device, TrackerMeta } from './types'
 import { requestJson, requestVoid, HttpRequestError } from '../../lib/httpClient'
 
 const BASE = import.meta.env.VITE_API_BASE_URL
@@ -50,9 +50,7 @@ export async function deleteDeviceResource(trackerName: string, deviceId: string
   try {
     await requestVoid(
       `${BASE}/api/trackers/${encodeURIComponent(trackerName)}/devices/${encodeURIComponent(deviceId)}`,
-      {
-        method: 'DELETE',
-      },
+      { method: 'DELETE' },
     )
   } catch (error) {
     throw toError(error)
@@ -80,10 +78,35 @@ export async function updateDeviceLocation(
   try {
     await requestVoid(
       `${BASE}/api/trackers/${encodeURIComponent(trackerName)}/devices/${encodeURIComponent(deviceId)}/location`,
-      {
-      method: 'POST',
-      body: JSON.stringify({ lat, lng }),
-    },
+      { method: 'POST', body: JSON.stringify({ lat, lng }) },
+    )
+  } catch (error) {
+    throw toError(error)
+  }
+}
+
+// ── Tracker meta (display names + groups) ─────────────────────────────────────
+
+export async function listTrackerMeta(trackerName: string): Promise<TrackerMeta> {
+  try {
+    return await requestJson<TrackerMeta>(
+      `${BASE}/api/trackers/${encodeURIComponent(trackerName)}/meta`,
+      { retries: 2 },
+    )
+  } catch (error) {
+    // 404 = meta doesn't exist yet, return defaults
+    if (error instanceof HttpRequestError && error.status === 404) {
+      return { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
+    }
+    throw toError(error)
+  }
+}
+
+export async function putTrackerMeta(trackerName: string, meta: TrackerMeta): Promise<void> {
+  try {
+    await requestVoid(
+      `${BASE}/api/trackers/${encodeURIComponent(trackerName)}/meta`,
+      { method: 'PUT', body: JSON.stringify(meta) },
     )
   } catch (error) {
     throw toError(error)

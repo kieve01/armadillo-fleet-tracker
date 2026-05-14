@@ -14,3 +14,15 @@ export interface Device {
   heading: number | null
   updatedAt: string
 }
+
+export interface DeviceGroup {
+  id: string
+  name: string
+}
+
+export interface TrackerMeta {
+  trackerName: string
+  displayName: string
+  groups: DeviceGroup[]
+  deviceGroups: Record<string, string>  // deviceId → groupId
+}

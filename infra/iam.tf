@@ -60,7 +60,6 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "*"
       },
       {
-        # AWS Location v2 — rutas (client-geo-routes)
         Effect   = "Allow"
         Action   = [
           "geo-routes:CalculateRoutes",
@@ -71,7 +70,6 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "*"
       },
       {
-        # AWS Location v2 — lugares (client-geo-places)
         Effect   = "Allow"
         Action   = [
           "geo-places:Autocomplete",
@@ -85,7 +83,6 @@ resource "aws_iam_role_policy" "ecs_task" {
         Resource = "*"
       },
       {
-        # AWS Location v1 — ruta calculator legacy (puede quitarse cuando se valide v2)
         Effect   = "Allow"
         Action   = ["geo:CalculateRoute"]
         Resource = "arn:aws:geo:${var.region}:${data.aws_caller_identity.current.account_id}:route-calculator/*"
@@ -99,6 +96,16 @@ resource "aws_iam_role_policy" "ecs_task" {
           "dynamodb:Scan",
         ]
         Resource = aws_dynamodb_table.routes.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+        ]
+        Resource = aws_dynamodb_table.tracker_meta.arn
       },
     ]
   })

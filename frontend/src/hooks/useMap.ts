@@ -5,6 +5,7 @@ import { buildStyleUrl } from '../components/map/mapHelpers'
 import { useMapStore } from '../store/mapStore'
 import { useUIStore } from '../store/uiStore'
 import { useVehiclesStore } from '../features/vehicles/vehiclesStore'
+import { getAnimatedPosition } from '../features/vehicles/useVehicleLayers'
 
 const DEFAULT_CENTER: [number, number] = [-77.03, -12.06]
 const DEFAULT_ZOOM = 10
@@ -13,17 +14,17 @@ const API_KEY = import.meta.env.VITE_MAP_API_KEY as string
 
 function getT(isDark: boolean) {
   return {
-    bg: isDark ? '#1e2435' : '#ffffff',
-    bgHover: isDark ? '#252b3d' : '#f4f6f9',
-    bgActive: isDark ? '#4a9fd4' : '#1a73e8',
-    text: isDark ? '#e2e8f0' : '#3c4043',
-    textMuted: isDark ? '#64748b' : '#b0b8c4',
+    bg:         isDark ? '#1e2435' : '#ffffff',
+    bgHover:    isDark ? '#252b3d' : '#f4f6f9',
+    bgActive:   isDark ? '#4a9fd4' : '#1a73e8',
+    text:       isDark ? '#e2e8f0' : '#3c4043',
+    textMuted:  isDark ? '#64748b' : '#b0b8c4',
     textActive: '#ffffff',
-    border: isDark ? '#2e3650' : 'rgba(0,0,0,0.10)',
-    shadow: isDark ? '0 4px 16px rgba(0,0,0,0.55)' : '0 2px 12px rgba(0,0,0,0.18)',
-    divider: isDark ? '#252b3d' : 'rgba(0,0,0,0.07)',
-    moonBg: isDark ? '#2e3a5c' : '#e8f0fe',
-    moonColor: isDark ? '#93c5fd' : '#1a73e8',
+    border:     isDark ? '#2e3650' : 'rgba(0,0,0,0.10)',
+    shadow:     isDark ? '0 4px 16px rgba(0,0,0,0.55)' : '0 2px 12px rgba(0,0,0,0.18)',
+    divider:    isDark ? '#252b3d' : 'rgba(0,0,0,0.07)',
+    moonBg:     isDark ? '#2e3a5c' : '#e8f0fe',
+    moonColor:  isDark ? '#93c5fd' : '#1a73e8',
   }
 }
 
@@ -35,6 +36,8 @@ const SVG = {
   moon: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`,
   sun: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`,
   layers: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>`,
+  // Fit fleet: encuadra flota y resetea orientación
+  fitFleet: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="3"/></svg>`,
 }
 
 // ── MapTypeControl ────────────────────────────────────────────────────────────
@@ -51,7 +54,6 @@ class MapTypeControl implements maplibregl.IControl {
       'display:flex;flex-direction:column;align-items:flex-end;gap:6px;' +
       'margin:0 10px 10px 0;position:relative;z-index:10;pointer-events:auto;'
 
-    // ── Toggle button ──
     this.toggleBtn = document.createElement('button')
     this.toggleBtn.title = 'Opciones de mapa'
     this.toggleBtn.style.cssText =
@@ -60,40 +62,31 @@ class MapTypeControl implements maplibregl.IControl {
       'transition:background 0.15s,box-shadow 0.15s,color 0.15s;flex-shrink:0;'
     this.toggleBtn.innerHTML = SVG.layers
 
-    // ── Panel ──
     this.panel = document.createElement('div')
     this.panel.style.cssText =
       'border-radius:12px;overflow:hidden;width:0;opacity:0;pointer-events:none;' +
       'transition:width 0.22s cubic-bezier(0.4,0,0.2,1),opacity 0.18s;min-width:0;'
 
-    // Helper: create a standard row
     const mkRow = (icon: string, label: string) => {
       const row = document.createElement('div')
       row.style.cssText =
-        'display:flex;align-items:center;width:100%;cursor:pointer;' +
-        'transition:background 0.12s,color 0.12s;'
-
+        'display:flex;align-items:center;width:100%;cursor:pointer;transition:background 0.12s,color 0.12s;'
       const iconWrap = document.createElement('span')
       iconWrap.style.cssText =
         'width:40px;height:38px;display:flex;align-items:center;justify-content:center;flex-shrink:0;'
       iconWrap.innerHTML = icon
-
       const labelEl = document.createElement('span')
       labelEl.style.cssText =
-        'font-size:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;' +
-        'white-space:nowrap;flex:1;'
+        'font-size:12px;font-weight:600;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;white-space:nowrap;flex:1;'
       labelEl.textContent = label
-
       row.appendChild(iconWrap)
       row.appendChild(labelEl)
       return { row, iconWrap, labelEl }
     }
 
-    // ── Map row — special: has dark toggle on the right ──
     const { row: rowMap } = mkRow(SVG.map, 'Mapa')
     rowMap.style.paddingRight = '6px'
 
-    // Dark map mini-button (hidden by default, shown when Map is active)
     const darkBtn = document.createElement('button')
     darkBtn.style.cssText =
       'border:none;cursor:pointer;outline:none;border-radius:7px;' +
@@ -106,15 +99,12 @@ class MapTypeControl implements maplibregl.IControl {
       useUIStore.getState().toggleDarkMap()
     })
     rowMap.appendChild(darkBtn)
-
     rowMap.addEventListener('click', () => useUIStore.getState().setMapStyle('Standard'))
 
-    // ── Hybrid row ──
     const { row: rowHybrid } = mkRow(SVG.hybrid, 'Satélite')
     rowHybrid.style.paddingRight = '12px'
     rowHybrid.addEventListener('click', () => useUIStore.getState().setMapStyle('Hybrid'))
 
-    // ── Satellite row ──
     const { row: rowSat } = mkRow(SVG.satellite, 'Sat. puro')
     rowSat.style.paddingRight = '12px'
     rowSat.addEventListener('click', () => {
@@ -123,11 +113,9 @@ class MapTypeControl implements maplibregl.IControl {
       store.setMapStyle('Satellite')
     })
 
-    // ── Divider ──
     const div1 = document.createElement('div')
     div1.style.cssText = 'height:1px;margin:0 0;flex-shrink:0;'
 
-    // ── Traffic row ──
     const { row: rowTraffic } = mkRow(SVG.traffic, 'Tráfico')
     rowTraffic.style.paddingRight = '12px'
     rowTraffic.addEventListener('click', () => useUIStore.getState().toggleTraffic())
@@ -150,32 +138,24 @@ class MapTypeControl implements maplibregl.IControl {
     this.container.appendChild(this.panel)
     this.container.appendChild(this.toggleBtn)
 
-    // ── Sync function ──
     const sync = () => {
       const { mapStyle, themeMode, trafficEnabled, darkMap } = useUIStore.getState()
       const t = getT(themeMode === 'dark')
       const isStandard = mapStyle === 'Standard'
 
-      // Toggle button
       this.toggleBtn!.style.background = this.expanded ? t.bgActive : t.bg
       this.toggleBtn!.style.color = this.expanded ? t.textActive : t.text
       this.toggleBtn!.style.boxShadow = t.shadow
       this.toggleBtn!.style.border = `1px solid ${t.border}`
 
-      // Panel shell
       this.panel!.style.background = t.bg
       this.panel!.style.boxShadow = t.shadow
       this.panel!.style.border = `1px solid ${t.border}`
       div1.style.background = t.divider
 
-      // Style each row
-      const styleRow = (
-        rowEl: HTMLDivElement,
-        active: boolean,
-      ) => {
+      const styleRow = (rowEl: HTMLDivElement, active: boolean) => {
         rowEl.style.background = active ? t.bgActive : t.bg
         rowEl.style.color = active ? t.textActive : t.text
-        // icon and label inherit color via currentColor
       }
 
       styleRow(rowMap, isStandard)
@@ -186,18 +166,16 @@ class MapTypeControl implements maplibregl.IControl {
       rowTraffic.style.opacity = trafficDisabled ? '0.4' : '1'
       rowTraffic.style.cursor = trafficDisabled ? 'not-allowed' : 'pointer'
 
-      // Hover listeners (re-attach so they use fresh t)
       const hoverRows: [HTMLDivElement, () => boolean][] = [
-        [rowMap, () => useUIStore.getState().mapStyle === 'Standard'],
+        [rowMap,    () => useUIStore.getState().mapStyle === 'Standard'],
         [rowHybrid, () => useUIStore.getState().mapStyle === 'Hybrid'],
-        [rowSat, () => useUIStore.getState().mapStyle === 'Satellite'],
+        [rowSat,    () => useUIStore.getState().mapStyle === 'Satellite'],
       ]
       hoverRows.forEach(([r, isActive]) => {
         r.onmouseenter = () => { if (!isActive()) r.style.background = t.bgHover }
         r.onmouseleave = () => { r.style.background = isActive() ? t.bgActive : t.bg }
       })
 
-      // Dark map mini-button visibility and state
       if (isStandard) {
         darkBtn.style.display = 'flex'
         darkBtn.style.background = darkMap ? t.moonBg : 'transparent'
@@ -211,7 +189,6 @@ class MapTypeControl implements maplibregl.IControl {
 
     this.unsub = useUIStore.subscribe(sync)
     sync()
-
     return this.container
   }
 
@@ -238,9 +215,7 @@ class MapTypeControl implements maplibregl.IControl {
   onRemove() { this.unsub?.(); this.container?.remove() }
 }
 
-
-
-// ── FitFleetControl ──────────────────────────────────────────────────────────
+// ── FitFleetControl — encuadra flota + resetea bearing y pitch ───────────────
 class FitFleetControl implements maplibregl.IControl {
   private map?: maplibregl.Map
   private container?: HTMLDivElement
@@ -251,101 +226,122 @@ class FitFleetControl implements maplibregl.IControl {
     this.container = document.createElement('div')
     this.container.className = 'maplibregl-ctrl maplibregl-ctrl-group armadillo-ctrl'
 
-    const mkBtn = (title: string, svg: string, onClick: () => void) => {
-      const btn = document.createElement('button')
-      btn.className = 'maplibregl-ctrl-icon armadillo-ctrl-btn'
-      btn.title = title
-      btn.innerHTML = svg
-      btn.addEventListener('click', onClick)
-      return btn
-    }
+    const btn = document.createElement('button')
+    btn.className = 'maplibregl-ctrl-icon armadillo-ctrl-btn'
+    btn.title = 'Encuadrar flota y restablecer orientación'
+    btn.innerHTML = SVG.fitFleet
+    btn.addEventListener('click', () => {
+      if (!this.map) return
 
-    const btnLima = mkBtn('Ver flota Lima',
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>' +
-      '<circle cx="12" cy="12" r="3"/></svg>',
-      () => {
-        if (!this.map) return
-        const devices = useVehiclesStore.getState().devices
-        const lima = devices.filter(d =>
-          d.lat >= -12.55 && d.lat <= -11.75 &&
-          d.lng >= -77.35 && d.lng <= -76.70
+      // Exit navigation follow mode if active
+      const { followMode, setFollowMode } = useVehiclesStore.getState()
+      if (followMode === 'navigation') setFollowMode('overview')
+
+      const devices = useVehiclesStore.getState().devices
+      const lima = devices.filter(d =>
+        d.lat >= -12.55 && d.lat <= -11.75 &&
+        d.lng >= -77.35 && d.lng <= -76.70
+      )
+      const targets = lima.length ? lima : devices
+
+      if (!targets.length) {
+        // No devices — just reset orientation
+        this.map.easeTo({ bearing: 0, pitch: 0, duration: 400 })
+        return
+      }
+
+      const lngs = targets.map(d => d.lng)
+      const lats  = targets.map(d => d.lat)
+
+      if (targets.length === 1) {
+        this.map.flyTo({ center: [lngs[0], lats[0]], zoom: 14, bearing: 0, pitch: 0 })
+      } else {
+        this.map.fitBounds(
+          [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+          { padding: 80, maxZoom: 13, bearing: 0, pitch: 0 }
         )
-        const targets = lima.length ? lima : devices
-        if (!targets.length) return
-        const lngs = targets.map(d => d.lng)
-        const lats = targets.map(d => d.lat)
-        targets.length === 1
-          ? this.map.flyTo({ center: [lngs[0], lats[0]], zoom: 14 })
-          : this.map.fitBounds(
-            [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-            { padding: 80, maxZoom: 13 }
-          )
       }
-    )
+    })
 
-    const btnNacional = mkBtn('Ver flota nacional',
-      '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
-      '<circle cx="12" cy="12" r="10"/>' +
-      '<line x1="2" y1="12" x2="22" y2="12"/>' +
-      '<path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>',
-      () => {
-        if (!this.map) return
-        const devices = useVehiclesStore.getState().devices
-        if (!devices.length) return
-        const lngs = devices.map(d => d.lng)
-        const lats = devices.map(d => d.lat)
-        devices.length === 1
-          ? this.map.flyTo({ center: [lngs[0], lats[0]], zoom: 12 })
-          : this.map.fitBounds(
-            [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-            { padding: 80, maxZoom: 12 }
-          )
-      }
-    )
-
-    this.container.appendChild(btnLima)
-    this.container.appendChild(btnNacional)
+    this.container.appendChild(btn)
 
     const apply = () => {
       const t = getT(useUIStore.getState().themeMode === 'dark')
-      this.container!.style.cssText = `background:${t.bg};box-shadow:${t.shadow};border:1px solid ${t.border};border-radius:8px;overflow:hidden;`
-        ;[btnLima, btnNacional].forEach(b => b.style.color = t.text)
+      this.container!.style.cssText =
+        `background:${t.bg};box-shadow:${t.shadow};border:1px solid ${t.border};border-radius:8px;overflow:hidden;`
+      btn.style.color = t.text
     }
     apply()
     this.unsub = useUIStore.subscribe(apply)
     return this.container
   }
+
   onRemove() { this.unsub?.(); this.container?.remove(); this.map = undefined }
+}
+
+// ── Follow vehicle hook ───────────────────────────────────────────────────────
+function useFollowVehicle(map: maplibregl.Map | null) {
+  const followMode        = useVehiclesStore(s => s.followMode)
+  const selectedDeviceId  = useVehiclesStore(s => s.selectedDeviceId)
+  const followTrackerName = useVehiclesStore(s => s.followTrackerName)
+  const devices           = useVehiclesStore(s => s.devices)
+
+  useEffect(() => {
+    if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
+
+    const device = devices.find(
+      d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
+    )
+    if (!device) return
+
+    const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
+    const lat      = animated?.lat ?? device.lat
+    const lng      = animated?.lng ?? device.lng
+    const heading  = animated?.heading ?? device.heading ?? 0
+
+    if (followMode === 'overview') {
+      map.easeTo({ center: [lng, lat], zoom: 15, bearing: 0, pitch: 0, duration: 800 })
+    } else if (followMode === 'navigation') {
+      map.easeTo({
+        center: [lng, lat], zoom: 18,
+        bearing: heading, pitch: 60,
+        duration: 800,
+        offset: [0, 80],
+      })
+    }
+  }, [map, followMode, selectedDeviceId, followTrackerName, devices])
 }
 
 // ── useMap ───────────────────────────────────────────────────────────────────
 export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
-  const setMap = useMapStore(s => s.setMap)
+  const setMap   = useMapStore(s => s.setMap)
   const setReady = useMapStore(s => s.setReady)
-  const mapRef = useRef<maplibregl.Map | null>(null)
+  const map      = useMapStore(s => s.map)
+  const mapRef   = useRef<maplibregl.Map | null>(null)
+
+  useFollowVehicle(map)
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const { mapStyle, trafficEnabled } = useUIStore.getState()
     const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
-    const map = new maplibregl.Map({
+    const newMap = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
       attributionControl: {},
     })
-      ; (map as any).__styleUrl = styleUrl
-    map.addControl(new maplibregl.NavigationControl(), 'top-right')
-    map.addControl(new FitFleetControl(), 'top-right')
-    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
-    map.addControl(new MapTypeControl(), 'bottom-right')
-    mapRef.current = map
-    setMap(map)
-    map.on('load', () => setReady(true))
+    ;(newMap as any).__styleUrl = styleUrl
+    newMap.addControl(new maplibregl.NavigationControl(), 'top-right')
+    newMap.addControl(new FitFleetControl(), 'top-right')
+    newMap.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
+    newMap.addControl(new MapTypeControl(), 'bottom-right')
+    mapRef.current = newMap
+    setMap(newMap)
+    newMap.on('load', () => setReady(true))
     return () => {
       setReady(false)
       useMapStore.getState().clearMap()
-      map.remove()
+      newMap.remove()
       mapRef.current = null
     }
   }, [containerRef, setMap, setReady])

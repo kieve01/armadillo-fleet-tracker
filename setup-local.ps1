@@ -1,9 +1,10 @@
-﻿# setup-local.ps1
+# setup-local.ps1
 # Corre una vez despues de git clone en cualquier laptop
 # Requiere: AWS CLI configurado con credenciales de la cuenta
 
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
 $region = "sa-east-1"
+$utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 
 Write-Host "Bajando keys desde SSM..." -ForegroundColor Cyan
 
@@ -29,32 +30,19 @@ if (-not $MapApiKey -or -not $GoogleApiKey) {
 
 Write-Host "  Keys obtenidas." -ForegroundColor Green
 
-# Backend .env
 $backendEnv = Join-Path $repo "backend\.env"
 if (-not (Test-Path $backendEnv)) {
-    @"
-AWS_REGION=sa-east-1
-GEOFENCE_COLLECTION=armadillo-tracker-geofence-collection
-ROUTE_CALCULATOR=armadillo-route-calculator
-ROUTES_TABLE=armadillo-dev-routes
-PLACE_INDEX=armadillo-places
-GOOGLE_MAPS_API_KEY=$GoogleApiKey
-"@ | Set-Content $backendEnv -Encoding UTF8
+    $content = "AWS_REGION=sa-east-1`nGEOFENCE_COLLECTION=armadillo-tracker-geofence-collection`nROUTE_CALCULATOR=armadillo-route-calculator`nROUTES_TABLE=armadillo-dev-routes`nPLACE_INDEX=armadillo-places`nGOOGLE_MAPS_API_KEY=$GoogleApiKey"
+    [System.IO.File]::WriteAllText($backendEnv, $content, $utf8NoBom)
     Write-Host "  backend\.env creado" -ForegroundColor Green
 } else {
     Write-Host "  backend\.env ya existe, no se sobreescribe" -ForegroundColor Yellow
 }
 
-# Frontend .env.local
 $frontendEnvLocal = Join-Path $repo "frontend\.env.local"
 if (-not (Test-Path $frontendEnvLocal)) {
-    @"
-VITE_API_BASE_URL=http://localhost:3000
-VITE_WS_URL=ws://localhost:3000
-VITE_AWS_REGION=sa-east-1
-VITE_MAP_STYLE=Hybrid
-VITE_MAP_API_KEY=$MapApiKey
-"@ | Set-Content $frontendEnvLocal -Encoding UTF8
+    $content = "VITE_API_BASE_URL=http://localhost:3000`nVITE_WS_URL=ws://localhost:3000`nVITE_AWS_REGION=sa-east-1`nVITE_MAP_STYLE=Hybrid`nVITE_MAP_API_KEY=$MapApiKey"
+    [System.IO.File]::WriteAllText($frontendEnvLocal, $content, $utf8NoBom)
     Write-Host "  frontend\.env.local creado" -ForegroundColor Green
 } else {
     Write-Host "  frontend\.env.local ya existe, no se sobreescribe" -ForegroundColor Yellow

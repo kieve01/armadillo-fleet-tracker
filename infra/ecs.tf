@@ -45,6 +45,7 @@ resource "aws_ecs_task_definition" "backend" {
       { name = "PORT",                value = "3000" },
       { name = "AWS_REGION",          value = var.region },
       { name = "ROUTES_TABLE",        value = aws_dynamodb_table.routes.name },
+      { name = "TRACKER_META_TABLE",  value = aws_dynamodb_table.tracker_meta.name },
       { name = "GEOFENCE_COLLECTION", value = var.geofence_collection },
       { name = "ROUTE_CALCULATOR",    value = var.route_calculator },
       { name = "PLACE_INDEX",         value = var.place_index },
@@ -83,7 +84,6 @@ resource "aws_ecs_service" "backend" {
 
   depends_on = [aws_lb_listener.https, aws_iam_role_policy_attachment.ecs_execution]
 
-  # Allow external CI/CD to update the task definition without Terraform reverting it
   lifecycle {
     ignore_changes = [task_definition]
   }
