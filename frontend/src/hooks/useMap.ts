@@ -275,8 +275,9 @@ class FitFleetControl implements maplibregl.IControl {
     btn.addEventListener('click', () => {
       if (!this.map) return
 
-      // Cancela follow completamente
-      useVehiclesStore.getState().setFollow(null, null, 'none')
+      // navigation → overview, overview/none → none
+      const { followMode: fm, setFollow: sf, setFollowMode: sfm } = useVehiclesStore.getState()
+      if (fm === 'navigation') { sfm('overview') } else { sf(null, null, 'none') }
 
       const devices = useVehiclesStore.getState().devices
       const lima = devices.filter(d =>

@@ -25,4 +25,5 @@ export interface TrackerMeta {
   displayName: string
   groups: DeviceGroup[]
   deviceGroups: Record<string, string>  // deviceId → groupId
+  deviceOrder: string[]                 // ordered list of deviceIds for manual sort
 }

@@ -87,21 +87,18 @@ function InlineEdit({ value, onSave }: { value: string; onSave: (v: string) => v
 // ── Sort ──────────────────────────────────────────────────────────────────────
 type SortOrder = 'activity' | 'alpha' | 'manual'
 
-function useManualOrder(storageKey: string, deviceIds: string[]) {
+// useManualOrder: persists via DynamoDB (trackerMeta.deviceOrder)
+function useManualOrder(trackerName: string, deviceIds: string[], savedOrder: string[], onSave: (o: string[]) => void) {
   const [order, setOrder] = useState<string[]>(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) ?? '[]') as string[]
-      const set = new Set(saved)
-      return [...saved.filter((id: string) => deviceIds.includes(id)), ...deviceIds.filter((id: string) => !set.has(id))]
-    } catch { return deviceIds }
+    const set = new Set(savedOrder)
+    return [...savedOrder.filter((id: string) => deviceIds.includes(id)), ...deviceIds.filter((id: string) => !set.has(id))]
   })
   useEffect(() => {
-    setOrder(prev => {
-      const set = new Set(prev)
-      return [...prev.filter(id => deviceIds.includes(id)), ...deviceIds.filter(id => !set.has(id))]
-    })
-  }, [deviceIds.join(',')]) // eslint-disable-line
-  const saveOrder = (o: string[]) => { setOrder(o); try { localStorage.setItem(storageKey, JSON.stringify(o)) } catch {} }
+    const set = new Set(savedOrder)
+    const merged = [...savedOrder.filter((id: string) => deviceIds.includes(id)), ...deviceIds.filter((id: string) => !set.has(id))]
+    setOrder(merged)
+  }, [savedOrder.join(','), deviceIds.join(',')]) // eslint-disable-line
+  const saveOrder = (o: string[]) => { setOrder(o); onSave(o) }
   return { order, saveOrder }
 }
 
@@ -285,6 +282,7 @@ export default function VehiclePanel() {
   const toggleGroupVisibility   = useVehiclesStore(s => s.toggleGroupVisibility)
   const toggleDeviceVisibility  = useVehiclesStore(s => s.toggleDeviceVisibility)
   const createGroup             = useVehiclesStore(s => s.createGroup)
+  const setDeviceOrder          = useVehiclesStore(s => s.setDeviceOrder)
   const renameGroup             = useVehiclesStore(s => s.renameGroup)
   const deleteGroup             = useVehiclesStore(s => s.deleteGroup)
   const assignDeviceToGroup     = useVehiclesStore(s => s.assignDeviceToGroup)
@@ -299,8 +297,15 @@ export default function VehiclePanel() {
 
   useEffect(() => { return () => { cancelPlace() } }, [cancelPlace])
 
-  // Click → overview (sky view), button de conducción en el item activa navigation
+  // Click vehículo: toggle selección
+  // - si no está seleccionado → selecciona + overview
+  // - si ya está seleccionado → deselecciona + none
   const handleSelectDevice = (deviceId: string, trackerName: string) => {
+    const isAlreadySelected = selectedDeviceId === deviceId && followTrackerName === trackerName
+    if (isAlreadySelected) {
+      setFollow(null, null, 'none')
+      return
+    }
     const animated    = getAnimatedPosition(trackerName, deviceId)
     const storeDevice = devices.find(d => d.deviceId === deviceId && d.trackerName === trackerName)
     const lat = animated?.lat ?? storeDevice?.lat
@@ -311,9 +316,14 @@ export default function VehiclePanel() {
     }
   }
 
-  const handleNavMode = (_deviceId: string, _trackerName: string) => {
-    // Solo cambia el modo — useMap reacciona al cambio y posiciona la cámara
+  // Activar modo conducción (solo desde overview)
+  const handleNavMode = () => {
     setFollowMode('navigation')
+  }
+
+  // Quitar modo conducción → vuelve a overview (no pierde selección)
+  const handleExitNav = () => {
+    setFollowMode('overview')
   }
 
   const devicesByTracker = useMemo(() => {
@@ -367,6 +377,7 @@ export default function VehiclePanel() {
                 trackerName={tn} trackerColor={colorFromTracker(tn)}
                 trackerDevices={tDevices} groups={groups} deviceGroups={deviceGroups}
                 isCollapsed={!!collapsedTrackers[tn]} isHiddenT={!!hiddenTrackers[tn]}
+                trackerMeta={trackerMeta} setDeviceOrder={setDeviceOrder}
                 collapsedGroups={collapsedGroups} hiddenGroups={hiddenGroups} hiddenDevices={hiddenDevices}
                 selectedDeviceId={selectedDeviceId} followMode={followMode} followTrackerName={followTrackerName}
                 onToggleCollapse={() => toggleTrackerCollapsed(tn)}
@@ -380,6 +391,7 @@ export default function VehiclePanel() {
                 onToggleDeviceVisibility={did => toggleDeviceVisibility(tn, did)}
                 onSelectDevice={handleSelectDevice}
                 onNavMode={handleNavMode}
+                onExitNav={handleExitNav}
               />
             )
           })
@@ -419,6 +431,7 @@ interface TrackerSectionProps {
   trackerName: string; trackerColor: string; trackerDevices: Device[]
   groups: DeviceGroup[]; deviceGroups: Record<string, string>
   isCollapsed: boolean; isHiddenT: boolean
+  trackerMeta: Record<string, any>; setDeviceOrder: (tn: string, o: string[]) => void
   collapsedGroups: Record<string, boolean>; hiddenGroups: Record<string, boolean>; hiddenDevices: Record<string, boolean>
   selectedDeviceId: string | null; followMode: FollowMode; followTrackerName: string | null
   onToggleCollapse: () => void; onToggleVisibility: () => void
@@ -428,7 +441,8 @@ interface TrackerSectionProps {
   onToggleGroupVisibility: (gid: string) => void; onDeleteGroup: (gid: string) => void
   onRenameGroup: (gid: string, name: string) => void; onToggleDeviceVisibility: (did: string) => void
   onSelectDevice: (did: string, tn: string) => void
-  onNavMode: (did: string, tn: string) => void
+  onNavMode: () => void
+  onExitNav: () => void
 }
 
 function TrackerSection({
@@ -446,8 +460,13 @@ function TrackerSection({
   const getGroupSort = (gid: string): SortOrder => groupSorts[gid] ?? 'activity'
   const setGroupSort = (gid: string, v: SortOrder) => setGroupSorts(p => ({ ...p, [gid]: v }))
 
-  const manualKey = `armadillo.manual_order.${trackerName}`
-  const { order, saveOrder } = useManualOrder(manualKey, trackerDevices.map(d => d.deviceId))
+  const savedOrder = trackerMeta[trackerName]?.deviceOrder ?? []
+  const { order, saveOrder } = useManualOrder(
+    trackerName,
+    trackerDevices.map(d => d.deviceId),
+    savedOrder,
+    (o) => setDeviceOrder(trackerName, o)
+  )
 
   const sortDevices = (devs: Device[], sortOrder: SortOrder): Device[] => {
     if (sortOrder === 'manual') {
@@ -587,10 +606,10 @@ function TrackerSection({
 interface DeviceItemProps {
   d: Device; trackerColor: string; isTrackerHidden: boolean; isGroupHidden: boolean
   isSelected: boolean; followMode: FollowMode; isHidden: boolean
-  onToggleVisibility: () => void; onSelect: () => void; onNavMode: () => void
+  onToggleVisibility: () => void; onSelect: () => void; onNavMode: () => void; onExitNav: () => void
 }
 
-function DeviceItem({ d, trackerColor, isTrackerHidden, isGroupHidden, isSelected, followMode, isHidden, onToggleVisibility, onSelect, onNavMode }: DeviceItemProps) {
+function DeviceItem({ d, trackerColor, isTrackerHidden, isGroupHidden, isSelected, followMode, isHidden, onToggleVisibility, onSelect, onNavMode, onExitNav }: DeviceItemProps) {
   const { text, offline } = timeLabel(d.updatedAt)
   const mins     = Math.floor((Date.now() - new Date(d.updatedAt).getTime()) / 60_000)
   const isActive = !offline && mins < 5
@@ -617,15 +636,23 @@ function DeviceItem({ d, trackerColor, isTrackerHidden, isGroupHidden, isSelecte
         </div>
       </div>
 
-      {/* Botón modo conducción — solo visible cuando el vehículo está seleccionado (overview) */}
+      {/* Botón modo conducción — visible en overview */}
       {isSelected && !isNavMode && (
-        <Tooltip title="Vista de conducción" mouseEnterDelay={0.3}>
-          <Button
-            size="small" type="text"
+        <Tooltip title="Modo conducción" mouseEnterDelay={0.3}>
+          <Button size="small" type="text"
             style={{ width: 22, height: 22, flexShrink: 0, color: trackerColor }}
-            onClick={e => { e.stopPropagation(); onNavMode() }}
-          >
+            onClick={e => { e.stopPropagation(); onNavMode() }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="12,2 22,20 12,16 2,20"/></svg>
+          </Button>
+        </Tooltip>
+      )}
+      {/* Botón salir conducción → vuelve a overview */}
+      {isNavMode && (
+        <Tooltip title="Volver a vista aérea" mouseEnterDelay={0.3}>
+          <Button size="small" type="text"
+            style={{ width: 22, height: 22, flexShrink: 0, color: trackerColor }}
+            onClick={e => { e.stopPropagation(); onExitNav() }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
           </Button>
         </Tooltip>
       )}
