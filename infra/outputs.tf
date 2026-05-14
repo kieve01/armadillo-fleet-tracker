@@ -24,3 +24,7 @@ output "ecs_service_name" {
 output "routes_table_name" {
   value = aws_dynamodb_table.routes.name
 }
+
+output "tracker_meta_table_name" {
+  value = aws_dynamodb_table.tracker_meta.name
+}
