@@ -115,7 +115,8 @@ jobs:
             -var="geofence_collection=${{ vars.GEOFENCE_COLLECTION }}" \
             -var="route_calculator=${{ vars.ROUTE_CALCULATOR }}" \
             -var="place_index=${{ vars.PLACE_INDEX }}" \
-            -var="container_image=${{ steps.ecr.outputs.url }}:${IMAGE_TAG}"
+            -var="container_image=${{ steps.ecr.outputs.url }}:${IMAGE_TAG}" \
+            -var="google_maps_api_key=${{ vars.GOOGLE_MAPS_API_KEY }}"
       - name: Force ECS redeploy
         run: |
           aws ecs update-service \
