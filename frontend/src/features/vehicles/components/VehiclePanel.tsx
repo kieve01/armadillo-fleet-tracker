@@ -179,7 +179,6 @@ function GroupModal({
               // In edit mode: can select freely (including from other groups)
               // In create mode: block devices already in a group
               const inOtherGroup = !isEdit && !!assignedTo
-              const inThisGroup  = assignedTo === editGroupId
               const otherGroupName = assignedTo && assignedTo !== editGroupId
                 ? groups.find(g => g.id === assignedTo)?.name
                 : null

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Button, Popconfirm, Tooltip, Typography } from 'antd'
+import { Popconfirm, Tooltip, Typography } from 'antd'
 import { EditOutlined, DeleteOutlined, EyeOutlined, EyeInvisibleOutlined, SwapOutlined } from '@ant-design/icons'
-import type { Geofence } from '../types'
+import type { Geofence, GeofenceCircleGeometry, GeofencePolygonGeometry } from '../types'
 import { useGeofencesStore, parseGeofenceId } from '../geofencesStore'
 import { useMapStore } from '../../../store/mapStore'
 import * as turf from '@turf/turf'
@@ -48,7 +48,7 @@ export default function GeofenceListItem({ geofence, trackerColor, onEdit, isHid
   const isCircle = 'Circle' in geofence.Geometry
 
   const subtitle = isCircle
-    ? `${Math.round(geofence.Geometry.Circle.Radius)} m radio`
+    ? `${Math.round((geofence.Geometry as GeofenceCircleGeometry).Circle.Radius)} m radio`
     : 'Polígono'
 
   const handleFlyTo = () => {
@@ -56,12 +56,12 @@ export default function GeofenceListItem({ geofence, trackerColor, onEdit, isHid
     const center = getGeofenceCenter(geofence)
     if (!center) return
     if (isCircle) {
-      const radiusKm = geofence.Geometry.Circle.Radius / 1000
+      const radiusKm = (geofence.Geometry as GeofenceCircleGeometry).Circle.Radius / 1000
       map.flyTo({ center, zoom: Math.max(10, Math.min(16, 14 - Math.log2(radiusKm))) })
     } else {
-      const coords = geofence.Geometry.Polygon[0]
-      const lngs = coords.map(c => c[0])
-      const lats = coords.map(c => c[1])
+      const coords = (geofence.Geometry as GeofencePolygonGeometry).Polygon[0]
+      const lngs = coords.map((c: number[]) => c[0])
+      const lats = coords.map((c: number[]) => c[1])
       map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 60, maxZoom: 16 })
     }
   }

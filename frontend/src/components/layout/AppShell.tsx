@@ -36,7 +36,7 @@ export default function AppShell() {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
       const { phase: gPhase, cancelDraft: gCancel } = useGeofencesStore.getState()
       if (gPhase === 'drawing') { gCancel(); return }
-      const { phase: rPhase, cancelDraft: rCancel, cancelCalculating } = useRoutesStore.getState()
+      const { phase: rPhase, cancelDraft: rCancel } = useRoutesStore.getState()
       if (rPhase === 'drawing') { rCancel(); return }
       if (rPhase === 'calculating') { useRoutesStore.getState().cancelCalculating(); return }
     }
