@@ -447,11 +447,12 @@ interface TrackerSectionProps {
 
 function TrackerSection({
   trackerName, trackerColor, trackerDevices, groups, deviceGroups,
-  isCollapsed, isHiddenT, collapsedGroups, hiddenGroups, hiddenDevices,
+  isCollapsed, isHiddenT, trackerMeta, setDeviceOrder,
+  collapsedGroups, hiddenGroups, hiddenDevices,
   selectedDeviceId, followMode, followTrackerName,
   onToggleCollapse, onToggleVisibility, onOpenCreateGroup, onOpenEditGroup,
   onToggleGroupCollapse, onToggleGroupVisibility, onDeleteGroup, onRenameGroup,
-  onToggleDeviceVisibility, onSelectDevice, onNavMode,
+  onToggleDeviceVisibility, onSelectDevice, onNavMode, onExitNav,
 }: TrackerSectionProps) {
 
   // Each group + ungrouped has its own sort state
@@ -460,7 +461,7 @@ function TrackerSection({
   const getGroupSort = (gid: string): SortOrder => groupSorts[gid] ?? 'activity'
   const setGroupSort = (gid: string, v: SortOrder) => setGroupSorts(p => ({ ...p, [gid]: v }))
 
-  const savedOrder = trackerMeta[trackerName]?.deviceOrder ?? []
+  const savedOrder = (trackerMeta[trackerName]?.deviceOrder) ?? []
   const { order, saveOrder } = useManualOrder(
     trackerName,
     trackerDevices.map(d => d.deviceId),

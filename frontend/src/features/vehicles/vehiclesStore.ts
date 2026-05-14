@@ -157,7 +157,7 @@ export const useVehiclesStore = create<VehiclesState>()(
       // ── Meta (DynamoDB via API — shared across all machines) ─────────────
 
       createGroup: (trackerName, groupName) => {
-        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {}, deviceOrder: [] }
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const newGroup: DeviceGroup = { id: generateGroupId(), name: groupName }
         const updated: TrackerMeta = { ...current, groups: [...current.groups, newGroup] }
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
@@ -166,7 +166,7 @@ export const useVehiclesStore = create<VehiclesState>()(
       },
 
       renameGroup: (trackerName, groupId, newName) => {
-        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {}, deviceOrder: [] }
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const updated: TrackerMeta = {
           ...current,
           groups: current.groups.map((g) => g.id === groupId ? { ...g, name: newName } : g),
@@ -176,7 +176,7 @@ export const useVehiclesStore = create<VehiclesState>()(
       },
 
       deleteGroup: (trackerName, groupId) => {
-        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {}, deviceOrder: [] }
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const deviceGroups = { ...current.deviceGroups }
         for (const [deviceId, gId] of Object.entries(deviceGroups)) {
           if (gId === groupId) delete deviceGroups[deviceId]
@@ -191,7 +191,7 @@ export const useVehiclesStore = create<VehiclesState>()(
       },
 
       assignDeviceToGroup: (trackerName, deviceId, groupId) => {
-        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {}, deviceOrder: [] }
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const deviceGroups = { ...current.deviceGroups }
         if (groupId === null) delete deviceGroups[deviceId]
         else deviceGroups[deviceId] = groupId
@@ -201,7 +201,7 @@ export const useVehiclesStore = create<VehiclesState>()(
       },
 
       setDeviceOrder: (trackerName, order) => {
-        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {}, deviceOrder: [] }
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const updated: TrackerMeta = { ...current, deviceOrder: order }
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
         putTrackerMeta(trackerName, updated).catch(console.error)
