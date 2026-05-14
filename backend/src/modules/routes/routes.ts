@@ -319,6 +319,7 @@ export function registerRouteRoutes(app: Express): void {
       }
 
       const origin = waypoints[0], destination = waypoints[1]
+      const debugDepartureTime = getFutureDepartureTime()
       const googleResp = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
         method: 'POST',
         headers: {
@@ -331,7 +332,7 @@ export function registerRouteRoutes(app: Express): void {
           destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
           travelMode:              'DRIVE',
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
-          departureTime:           getFutureDepartureTime(),
+          departureTime:           debugDepartureTime,
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
           polylineQuality:         'HIGH_QUALITY',
@@ -341,9 +342,11 @@ export function registerRouteRoutes(app: Express): void {
       const parseSecs = (s: string | undefined) => s ? parseInt(s.replace('s', ''), 10) : null
 
       res.json({
-        provider:   'google',
-        httpStatus: googleResp.status,
-        error:      data.error ?? null,
+        provider:        'google',
+        httpStatus:      googleResp.status,
+        departureTimeSent: debugDepartureTime,
+        containerDateNow:  new Date().toISOString(),
+        error:           data.error ?? null,
         routeCount: (data.routes ?? []).length,
         routes: (data.routes ?? []).map((r: any, i: number) => {
           const dur    = parseSecs(r.duration)
