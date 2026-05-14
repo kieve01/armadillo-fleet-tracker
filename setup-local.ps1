@@ -1,5 +1,5 @@
-# setup-local.ps1
-# Corre una vez después de git clone en cualquier laptop
+﻿# setup-local.ps1
+# Corre una vez despues de git clone en cualquier laptop
 # Requiere: AWS CLI configurado con credenciales de la cuenta
 
 $repo = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -23,7 +23,7 @@ $GoogleApiKey = aws ssm get-parameter `
 
 if (-not $MapApiKey -or -not $GoogleApiKey) {
     Write-Host "Error: no se pudieron obtener las keys de SSM." -ForegroundColor Red
-    Write-Host "Verifica que el AWS CLI esté configurado con la cuenta correcta." -ForegroundColor Red
+    Write-Host "Verifica que el AWS CLI este configurado con la cuenta correcta." -ForegroundColor Red
     exit 1
 }
 
@@ -65,6 +65,7 @@ npm install
 npm install --prefix backend
 npm install --prefix frontend
 Write-Host "  Dependencias instaladas." -ForegroundColor Green
+
 Write-Host ""
 Write-Host "Listo. Para correr el proyecto:" -ForegroundColor Cyan
 Write-Host "  npm run dev" -ForegroundColor White
