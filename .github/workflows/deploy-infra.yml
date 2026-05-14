@@ -116,3 +116,10 @@ jobs:
             -var="route_calculator=${{ vars.ROUTE_CALCULATOR }}" \
             -var="place_index=${{ vars.PLACE_INDEX }}" \
             -var="container_image=${{ steps.ecr.outputs.url }}:${IMAGE_TAG}"
+      - name: Force ECS redeploy
+        run: |
+          aws ecs update-service \
+            --cluster ${APP_NAME}-${STAGE} \
+            --service ${APP_NAME}-${STAGE}-backend \
+            --force-new-deployment \
+            --region ${AWS_REGION} > /dev/null
