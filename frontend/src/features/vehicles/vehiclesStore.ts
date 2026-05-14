@@ -7,6 +7,8 @@ import {
   deleteDeviceResource,
   listDevices,
   updateDeviceLocation,
+  listTrackerMeta,
+  putTrackerMeta,
 } from './vehiclesService'
 import type { TrackerResource, Device, TrackerMeta, DeviceGroup } from './types'
 
@@ -76,24 +78,6 @@ function generateGroupId(): string {
   return `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
 }
 
-function getMetaKey(trackerName: string): string {
-  return `armadillo.tracker_meta.${trackerName}`
-}
-
-function loadMeta(trackerName: string): TrackerMeta {
-  try {
-    const raw = localStorage.getItem(getMetaKey(trackerName))
-    if (raw) return JSON.parse(raw) as TrackerMeta
-  } catch {}
-  return { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
-}
-
-function saveMeta(meta: TrackerMeta): void {
-  try {
-    localStorage.setItem(getMetaKey(meta.trackerName), JSON.stringify(meta))
-  } catch {}
-}
-
 export const useVehiclesStore = create<VehiclesState>()(
   persist(
     (set, get) => ({
@@ -117,15 +101,22 @@ export const useVehiclesStore = create<VehiclesState>()(
         set({ loading: true, error: null })
         try {
           const resources = await listTrackerResources()
-          const allDevices = (
-            await Promise.all(resources.map((r) => listDevices(r.trackerName).catch(() => [])))
-          ).flat()
-          // Load meta from localStorage for each tracker
+          const [allDevicesNested, allMeta] = await Promise.all([
+            Promise.all(resources.map((r) => listDevices(r.trackerName).catch(() => []))),
+            Promise.all(resources.map((r) =>
+              listTrackerMeta(r.trackerName).catch((): TrackerMeta => ({
+                trackerName: r.trackerName,
+                displayName: r.trackerName,
+                groups: [],
+                deviceGroups: {},
+              }))
+            )),
+          ])
           const trackerMeta: Record<string, TrackerMeta> = {}
-          for (const r of resources) {
-            trackerMeta[r.trackerName] = loadMeta(r.trackerName)
+          for (const meta of allMeta) {
+            trackerMeta[meta.trackerName] = meta
           }
-          set({ trackerResources: resources, devices: allDevices, trackerMeta, loading: false })
+          set({ trackerResources: resources, devices: allDevicesNested.flat(), trackerMeta, loading: false })
         } catch (e) {
           set({ loading: false, error: (e as Error).message })
         }
@@ -162,28 +153,28 @@ export const useVehiclesStore = create<VehiclesState>()(
         }
       },
 
-      // ── Meta (localStorage only) ──────────────────────────────────────────
+      // ── Meta (DynamoDB via API — shared across all machines) ─────────────
 
       createGroup: (trackerName, groupName) => {
-        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const newGroup: DeviceGroup = { id: generateGroupId(), name: groupName }
         const updated: TrackerMeta = { ...current, groups: [...current.groups, newGroup] }
-        saveMeta(updated)
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+        putTrackerMeta(trackerName, updated).catch(console.error)
       },
 
       renameGroup: (trackerName, groupId, newName) => {
-        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const updated: TrackerMeta = {
           ...current,
           groups: current.groups.map((g) => g.id === groupId ? { ...g, name: newName } : g),
         }
-        saveMeta(updated)
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+        putTrackerMeta(trackerName, updated).catch(console.error)
       },
 
       deleteGroup: (trackerName, groupId) => {
-        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const deviceGroups = { ...current.deviceGroups }
         for (const [deviceId, gId] of Object.entries(deviceGroups)) {
           if (gId === groupId) delete deviceGroups[deviceId]
@@ -193,18 +184,18 @@ export const useVehiclesStore = create<VehiclesState>()(
           groups: current.groups.filter((g) => g.id !== groupId),
           deviceGroups,
         }
-        saveMeta(updated)
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+        putTrackerMeta(trackerName, updated).catch(console.error)
       },
 
       assignDeviceToGroup: (trackerName, deviceId, groupId) => {
-        const current = get().trackerMeta[trackerName] ?? loadMeta(trackerName)
+        const current = get().trackerMeta[trackerName] ?? { trackerName, displayName: trackerName, groups: [], deviceGroups: {} }
         const deviceGroups = { ...current.deviceGroups }
         if (groupId === null) delete deviceGroups[deviceId]
         else deviceGroups[deviceId] = groupId
         const updated: TrackerMeta = { ...current, deviceGroups }
-        saveMeta(updated)
         set((s) => ({ trackerMeta: { ...s.trackerMeta, [trackerName]: updated } }))
+        putTrackerMeta(trackerName, updated).catch(console.error)
       },
 
       // ── Follow ────────────────────────────────────────────────────────────

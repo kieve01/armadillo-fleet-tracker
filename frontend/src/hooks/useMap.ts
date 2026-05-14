@@ -326,10 +326,10 @@ function useFollowVehicle(map: maplibregl.Map | null) {
   const followTrackerName = useVehiclesStore(s => s.followTrackerName)
   const devices           = useVehiclesStore(s => s.devices)
 
-  // ── Registrar/desregistrar el callback de follow en el módulo de capas ────
-  // Cuando followMode cambia a activo, registramos un callback que el RAF tick
-  // de useVehicleLayers invocará frame a frame con la posición animada exacta.
-  // Así la cámara se mueve en sincronía con el marcador, sin saltos periódicos.
+  // ── Registrar callback de follow en el módulo de capas ────────────────────
+  // El RAF tick de useVehicleLayers llama este callback frame a frame con la
+  // posición animada exacta. jumpTo es instantáneo — el suavizado lo hace el
+  // interpolador, no el mapa. Cámara y marcador se mueven en sincronía.
   useEffect(() => {
     if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) {
       setFollowKey(null)
@@ -345,7 +345,7 @@ function useFollowVehicle(map: maplibregl.Map | null) {
         map.jumpTo({ center: [lng, lat] })
       })
     } else {
-      // navigation / sky: rotar bearing con el heading del vehículo
+      // navigation / sky
       setFollowCallback((lat, lng, heading) => {
         map.jumpTo({ center: [lng, lat], bearing: heading })
       })
@@ -358,8 +358,8 @@ function useFollowVehicle(map: maplibregl.Map | null) {
   }, [map, followMode, selectedDeviceId, followTrackerName])
 
   // ── Encuadre inicial al activar follow ────────────────────────────────────
-  // Solo al montar/cambiar modo: posiciona zoom, pitch y offset una sola vez.
-  // El seguimiento continuo queda a cargo del RAF callback registrado arriba.
+  // Solo al montar/cambiar modo: posiciona zoom, pitch y offset con easeTo.
+  // El seguimiento continuo lo hace el RAF callback.
   useEffect(() => {
     if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
 
@@ -379,13 +379,43 @@ function useFollowVehicle(map: maplibregl.Map | null) {
       map.easeTo({
         center: [lng, lat], zoom: 18,
         bearing: heading, pitch: 60,
-        duration: 600,
-        offset: [0, 80],
+        duration: 600, offset: [0, 80],
       })
     }
-  // Intencionalmente no incluye `devices` — este efecto solo corre al cambiar
-  // de modo. El seguimiento continuo lo maneja el RAF callback.
+  // Solo re-corre al cambiar de modo o dispositivo — no en cada update de devices.
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map, followMode, selectedDeviceId, followTrackerName])
+
+  // ── Reposicionar cámara al recuperar visibilidad de la pestaña ────────────
+  // Cuando el tab vuelve al foco, el RAF había estado pausado y la cámara quedó
+  // en la última posición conocida antes de perder foco. Reposicionamos
+  // instantáneamente a la posición actual del dispositivo seguido.
+  useEffect(() => {
+    if (!map) return
+
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (followMode === 'none' || !selectedDeviceId || !followTrackerName) return
+
+      const device = useVehiclesStore.getState().devices.find(
+        d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
+      )
+      if (!device) return
+
+      const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
+      const lat      = animated?.lat ?? device.lat
+      const lng      = animated?.lng ?? device.lng
+      const heading  = animated?.heading ?? device.heading ?? 0
+
+      if (followMode === 'overview') {
+        map.jumpTo({ center: [lng, lat] })
+      } else {
+        map.jumpTo({ center: [lng, lat], bearing: heading })
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
   }, [map, followMode, selectedDeviceId, followTrackerName])
 }
 
