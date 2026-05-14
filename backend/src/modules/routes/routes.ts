@@ -55,19 +55,14 @@ async function callGoogleRoutes(input: CalcInput): Promise<RouteResult[]> {
   const destination = input.waypoints[input.waypoints.length - 1]
   const maxAlts     = Math.min((input.maxAlternatives ?? 3) - 1, 2)
 
-  // departureTime en RFC3339 — requerido para que Google use tráfico en tiempo real.
-  // Sin este campo la API usa tráfico histórico promedio y speedReadingIntervals
-  // devuelve casi todo NORMAL (sin variación), lo que resulta en ruta siempre verde.
-  // +3 minutos para compensar drift del reloj del contenedor ECS — Google rechaza
-  // timestamps pasados con INVALID_ARGUMENT "Timestamp must be set to a future time".
-  const departureTimeISO = new Date(Date.now() + 10 * 60 * 1000).toISOString()
-
+  // Sin departureTime: Google lo toma como "ahora" usando su propio reloj (doc oficial).
+  // Evita el error INVALID_ARGUMENT por cualquier skew del reloj del contenedor ECS.
+  // TRAFFIC_AWARE_OPTIMAL + TRAFFIC_ON_POLYLINE funcionan igual sin este campo.
   const body: any = {
     origin:      { location: { latLng: { latitude: origin[1],      longitude: origin[0] } } },
     destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
     travelMode:              input.travelMode === 'Walking' ? 'WALK' : 'DRIVE',
     routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
-    departureTime:           departureTimeISO,
     computeAlternativeRoutes: maxAlts > 0,
     extraComputations:       ['TRAFFIC_ON_POLYLINE'],
     polylineQuality:         'HIGH_QUALITY',
@@ -311,7 +306,6 @@ export function registerRouteRoutes(app: Express): void {
           destination: { location: { latLng: { latitude: destination[1], longitude: destination[0] } } },
           travelMode:              'DRIVE',
           routingPreference:       'TRAFFIC_AWARE_OPTIMAL',
-          departureTime:           new Date(Date.now() + 10 * 60 * 1000).toISOString(),
           computeAlternativeRoutes: true,
           extraComputations:       ['TRAFFIC_ON_POLYLINE'],
           polylineQuality:         'HIGH_QUALITY',
