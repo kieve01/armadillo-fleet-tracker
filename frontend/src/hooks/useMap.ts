@@ -359,8 +359,9 @@ function useFollowVehicle(map: maplibregl.Map | null) {
   }, [map, followMode, selectedDeviceId, followTrackerName])
 
   // ── Encuadre inicial al activar follow ────────────────────────────────────
-  // Solo al montar/cambiar modo: posiciona zoom, pitch y offset con easeTo.
-  // El seguimiento continuo lo hace el RAF callback.
+  // Solo al montar/cambiar modo o vehículo: posiciona zoom, pitch y offset.
+  // Usa flyTo cuando el destino está lejos del centro actual para evitar
+  // el salto brusco que ocurre cuando jumpTo del RAF anterior pelea con easeTo.
   useEffect(() => {
     if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
 
@@ -369,23 +370,41 @@ function useFollowVehicle(map: maplibregl.Map | null) {
     )
     if (!device) return
 
+    // Pausar el follow callback un frame para que no interfiera con la
+    // transición de cámara al nuevo vehículo
+    setFollowCallback(null)
+
     const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
     const lat      = animated?.lat ?? device.lat
     const lng      = animated?.lng ?? device.lng
     const heading  = animated?.heading ?? device.heading ?? 0
 
+    const currentCenter = map.getCenter()
+    const distDeg = Math.hypot(currentCenter.lat - lat, currentCenter.lng - lng)
+    const useFly  = distDeg > 0.05  // ~5 km — usar flyTo si el destino está lejos
+
     if (followMode === 'overview') {
-      map.easeTo({ center: [lng, lat], zoom: 15, bearing: 0, pitch: 0, duration: 600 })
+      const opts = { center: [lng, lat] as [number, number], zoom: 15, bearing: 0, pitch: 0, duration: 700 }
+      useFly ? map.flyTo(opts) : map.easeTo(opts)
     } else if (followMode === 'navigation') {
-      map.easeTo({
-        center: [lng, lat], zoom: 18,
+      const opts = {
+        center: [lng, lat] as [number, number], zoom: 18,
         bearing: heading, pitch: 60,
-        duration: 600, offset: [0, 80],
-      })
+        duration: 800, offset: [0, 80] as [number, number],
+      }
+      useFly ? map.flyTo(opts) : map.easeTo(opts)
     }
   // Solo re-corre al cambiar de modo o dispositivo — no en cada update de devices.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, followMode, selectedDeviceId, followTrackerName])
+
+  // ── Resetear pitch y bearing al salir de follow ───────────────────────────
+  // Cuando followMode pasa a 'none', nadie aplica easeTo — la cámara queda
+  // inclinada a 60° si se venía de modo navegación. Este efecto lo corrige.
+  useEffect(() => {
+    if (!map || followMode !== 'none') return
+    map.easeTo({ pitch: 0, bearing: 0, duration: 400 })
+  }, [map, followMode])
 
   // ── Reposicionar cámara al recuperar visibilidad de la pestaña ────────────
   // Cuando el tab vuelve al foco, el RAF había estado pausado y la cámara quedó
