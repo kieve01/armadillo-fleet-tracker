@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import type { Map as MLMap, GeoJSONSource, MapMouseEvent } from 'maplibre-gl'
 import { useMapStore } from '../../store/mapStore'
 import { useVehiclesStore } from './vehiclesStore'
@@ -9,25 +9,109 @@ const CIRCLE_LAYER = 'trackers-circle'
 const LABEL_LAYER  = 'trackers-label'
 const ARROW_LAYER  = 'trackers-arrow'
 
+// ─── Kalman filter 1D ────────────────────────────────────────────────────────
+class KalmanFilter {
+  private R: number; private Q: number
+  private x = 0; private P = 1; private k = 0
+  constructor(R = 0.008, Q = 3) { this.R = R; this.Q = Q }
+  filter(z: number): number {
+    if (this.k === 0) { this.x = z; this.k = 1; return z }
+    const Pp = this.P + this.Q
+    const K  = Pp / (Pp + this.R)
+    this.x   = this.x + K * (z - this.x)
+    this.P   = (1 - K) * Pp
+    return this.x
+  }
+  reset(z: number) { this.x = z; this.P = 1; this.k = 1 }
+}
+
+// ─── Haversine ───────────────────────────────────────────────────────────────
+function haversineM(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R  = 6_371_000
+  const φ1 = lat1 * Math.PI / 180
+  const φ2 = lat2 * Math.PI / 180
+  const Δφ = (lat2 - lat1) * Math.PI / 180
+  const Δλ = (lng2 - lng1) * Math.PI / 180
+  const a  = Math.sin(Δφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+// ─── Tipos ───────────────────────────────────────────────────────────────────
+interface AnimState {
+  fromLat: number; fromLng: number; fromHeading: number
+  toLat:   number; toLng:   number; toHeading:   number
+  startTime: number
+  segmentMs: number
+}
+
+interface AnimPos { lat: number; lng: number; heading: number }
+
+// ─── Constantes ──────────────────────────────────────────────────────────────
+const MAX_ANIM_DISTANCE_M = 500
+
+function easeOut(t: number): number { return 1 - Math.pow(1 - Math.min(t, 1), 3) }
+
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = b - a
+  if (d >  180) d -= 360
+  if (d < -180) d += 360
+  return a + d * t
+}
+
+function estimateInterval(prev: string | undefined, next: string): number {
+  if (!prev) return 15_000
+  const delta = new Date(next).getTime() - new Date(prev).getTime()
+  return Math.min(Math.max(delta, 5_000), 90_000)
+}
+
 function resolveWsUrl(): string | null {
   return (import.meta.env.VITE_WS_URL as string | undefined) ?? null
 }
 
+// ─── Estado de módulo ─────────────────────────────────────────────────────────
+let _animPosMap = new Map<string, AnimPos>()
+
+export function getAnimatedPosition(trackerName: string, deviceId: string): AnimPos | undefined {
+  return _animPosMap.get(`${trackerName}/${deviceId}`)
+}
+
+// ─── Follow callback ──────────────────────────────────────────────────────────
+// Registrado por useMap; invocado en cada tick del RAF con la posición animada
+// del vehículo seguido. Así la cámara se mueve frame a frame junto al marcador,
+// sin depender del ciclo de actualización del store (que llega cada ~15 s).
+type FollowCallback = (lat: number, lng: number, heading: number) => void
+let _followCallback: FollowCallback | null = null
+
+export function setFollowCallback(cb: FollowCallback | null): void {
+  _followCallback = cb
+}
+
+// Clave del vehículo actualmente seguido: "trackerName/deviceId" o null
+let _followKey: string | null = null
+
+export function setFollowKey(key: string | null): void {
+  _followKey = key
+}
+
 // ─── GeoJSON builder ─────────────────────────────────────────────────────────
-function devicesToFC(devices: Device[]): GeoJSON.FeatureCollection {
+function devicesToFC(devices: Device[], animPos: Map<string, AnimPos>): GeoJSON.FeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: devices.map((d) => ({
-      type: 'Feature',
-      properties: {
-        id:         d.deviceId,
-        tracker:    d.trackerName,
-        speed:      d.speed,
-        heading:    d.heading ?? 0,
-        hasHeading: d.heading != null ? 1 : 0,
-      },
-      geometry: { type: 'Point', coordinates: [d.lng, d.lat] },
-    })),
+    features: devices.map((d) => {
+      const key  = `${d.trackerName}/${d.deviceId}`
+      const anim = animPos.get(key)
+      return {
+        type: 'Feature',
+        properties: {
+          id:         d.deviceId,
+          tracker:    d.trackerName,
+          speed:      d.speed,
+          heading:    anim?.heading ?? d.heading ?? 0,
+          hasHeading: d.heading != null ? 1 : 0,
+        },
+        geometry: { type: 'Point', coordinates: [anim?.lng ?? d.lng, anim?.lat ?? d.lat] },
+      }
+    }),
   }
 }
 
@@ -94,8 +178,158 @@ export function useVehicleLayers() {
   const phase                = useVehiclesStore(s => s.phase)
   const setPendingLocation   = useVehiclesStore(s => s.setPendingLocation)
 
-  const mapRef = useRef<MLMap | null>(null)
+  const fcRef        = useRef<GeoJSON.FeatureCollection>({ type: 'FeatureCollection', features: [] })
+  const animPosRef   = useRef<Map<string, AnimPos>>(_animPosMap)
+  const animStateRef = useRef<Map<string, AnimState>>(new Map())
+  const kalmanRef    = useRef<Map<string, { lat: KalmanFilter; lng: KalmanFilter }>>(new Map())
+  const mapRef       = useRef<MLMap | null>(null)
+  const mapReadyRef  = useRef<boolean>(false)
+  const lastUpdateAtRef = useRef<Map<string, string>>(new Map())
+  const globalRafRef    = useRef<number | null>(null)
+  const isVisibleRef    = useRef<boolean>(document.visibilityState === 'visible')
+
   useEffect(() => { mapRef.current = map ?? null }, [map])
+  useEffect(() => { mapReadyRef.current = !!mapReady }, [mapReady])
+
+  // ── Actualizar mapa con el FC cacheado ────────────────────────────────────
+  const flushToMap = useCallback(() => {
+    const source = mapRef.current?.getSource(SOURCE_ID) as GeoJSONSource | undefined
+    source?.setData(fcRef.current)
+  }, [])
+
+  // ── RAF global ────────────────────────────────────────────────────────────
+  const startGlobalRaf = useCallback(() => {
+    if (globalRafRef.current || !isVisibleRef.current) return
+
+    const tick = (now: number) => {
+      globalRafRef.current = null
+      if (!isVisibleRef.current) return
+
+      let anyActive = false
+      const features = [...fcRef.current.features]
+      let changed = false
+
+      animStateRef.current.forEach((state: AnimState, key: string) => {
+        const elapsed = now - state.startTime
+        const t       = elapsed / state.segmentMs
+        if (t >= 1) return
+
+        const te      = easeOut(t)
+        const lat     = state.fromLat + (state.toLat - state.fromLat) * te
+        const lng     = state.fromLng + (state.toLng - state.fromLng) * te
+        const heading = lerpAngle(state.fromHeading, state.toHeading, te)
+
+        animPosRef.current.set(key, { lat, lng, heading })
+        anyActive = true
+
+        // ── Follow: mover la cámara frame a frame junto al marcador ─────────
+        // Se invoca aquí, dentro del RAF, para que la cámara sea perfectamente
+        // síncrona con la posición animada — no con el ciclo del store.
+        if (key === _followKey && _followCallback) {
+          _followCallback(lat, lng, heading)
+        }
+
+        const [tracker, ...rest] = key.split('/')
+        const deviceId = rest.join('/')
+        const fi = features.findIndex(
+          f => f.properties?.id === deviceId && f.properties?.tracker === tracker,
+        )
+        if (fi >= 0) {
+          features[fi] = {
+            ...features[fi],
+            properties: { ...features[fi].properties, heading },
+            geometry:   { type: 'Point', coordinates: [lng, lat] },
+          }
+          changed = true
+        }
+      })
+
+      if (changed) {
+        const newFc = { ...fcRef.current, features }
+        fcRef.current = newFc
+        flushToMap()
+      }
+
+      if (anyActive) globalRafRef.current = requestAnimationFrame(tick)
+    }
+
+    globalRafRef.current = requestAnimationFrame(tick)
+  }, [flushToMap])
+
+  // ── Page Visibility API ────────────────────────────────────────────────────
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      const visible = document.visibilityState === 'visible'
+      isVisibleRef.current = visible
+
+      if (visible) {
+        animStateRef.current.clear()
+        flushToMap()
+      } else {
+        if (globalRafRef.current) {
+          cancelAnimationFrame(globalRafRef.current)
+          globalRafRef.current = null
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange)
+  }, [flushToMap])
+
+  // ── Upsert: Kalman + animación ────────────────────────────────────────────
+  const wrappedUpsertRef = useRef<typeof upsertDevicePosition>((e) => upsertDevicePosition(e))
+
+  useEffect(() => {
+    wrappedUpsertRef.current = (event) => {
+      const key = `${event.trackerName}/${event.deviceId}`
+
+      let kf = kalmanRef.current.get(key)
+      if (!kf) {
+        kf = { lat: new KalmanFilter(), lng: new KalmanFilter() }
+        kalmanRef.current.set(key, kf)
+      }
+      const fLat = kf.lat.filter(event.lat)
+      const fLng = kf.lng.filter(event.lng)
+
+      const prevAt    = lastUpdateAtRef.current.get(key)
+      const segmentMs = estimateInterval(prevAt, event.updatedAt)
+      lastUpdateAtRef.current.set(key, event.updatedAt)
+
+      const cur     = animPosRef.current.get(key)
+      const fromLat = cur?.lat     ?? fLat
+      const fromLng = cur?.lng     ?? fLng
+      const fromHdg = cur?.heading ?? event.heading ?? 0
+      const toHdg   = event.heading ?? fromHdg
+
+      const distM = haversineM(fromLat, fromLng, fLat, fLng)
+      if (distM > MAX_ANIM_DISTANCE_M) {
+        kf.lat.reset(event.lat)
+        kf.lng.reset(event.lng)
+        animPosRef.current.set(key, { lat: event.lat, lng: event.lng, heading: toHdg })
+        animStateRef.current.delete(key)
+        upsertDevicePosition({ ...event })
+        return
+      }
+
+      if (!isVisibleRef.current) {
+        animPosRef.current.set(key, { lat: fLat, lng: fLng, heading: toHdg })
+        animStateRef.current.delete(key)
+        upsertDevicePosition({ ...event, lat: fLat, lng: fLng })
+        return
+      }
+
+      animStateRef.current.set(key, {
+        fromLat, fromLng, fromHeading: fromHdg,
+        toLat: fLat, toLng: fLng, toHeading: toHdg,
+        startTime: performance.now(),
+        segmentMs,
+      })
+
+      startGlobalRaf()
+      upsertDevicePosition({ ...event, lat: fLat, lng: fLng })
+    }
+  }, [upsertDevicePosition, startGlobalRaf])
 
   // ── WebSocket con backoff exponencial ─────────────────────────────────────
   useEffect(() => {
@@ -126,7 +360,7 @@ export function useVehicleLayers() {
             }
           }
           if (data.type === 'device_position' && data.payload) {
-            upsertDevicePosition(data.payload)
+            wrappedUpsertRef.current(data.payload)
           }
         } catch {}
       }
@@ -156,8 +390,9 @@ export function useVehicleLayers() {
       document.removeEventListener('visibilitychange', onVisible)
       if (reconnectTimer) clearTimeout(reconnectTimer)
       socket?.close(1000, 'unmount')
+      if (globalRafRef.current) { cancelAnimationFrame(globalRafRef.current); globalRafRef.current = null }
     }
-  }, [mapReady, fetchAll, upsertDevicePosition])
+  }, [mapReady, fetchAll])
 
   // ── Reload layers tras cambio de estilo ───────────────────────────────────
   useEffect(() => {
@@ -166,11 +401,7 @@ export function useVehicleLayers() {
       if ((map as any)._removed) return
       loadArrowIcon(map).then(() => {
         addSourceAndLayers(map)
-        const visible = useVehiclesStore.getState().devices.filter(d =>
-          !useVehiclesStore.getState().hiddenTrackers[d.trackerName] &&
-          !useVehiclesStore.getState().hiddenDevices[`${d.trackerName}/${d.deviceId}`]
-        )
-        ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(devicesToFC(visible))
+        ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(fcRef.current)
       })
     }
     setup()
@@ -198,6 +429,8 @@ export function useVehicleLayers() {
     const visible = devices.filter(d =>
       !hiddenTrackers[d.trackerName] && !hiddenDevices[`${d.trackerName}/${d.deviceId}`],
     )
-    ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(devicesToFC(visible))
+    const fc = devicesToFC(visible, animPosRef.current)
+    fcRef.current = fc
+    ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(fc)
   }, [map, mapReady, devices, hiddenTrackers, hiddenDevices])
 }

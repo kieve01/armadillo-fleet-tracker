@@ -5,7 +5,7 @@ import { buildStyleUrl } from '../components/map/mapHelpers'
 import { useMapStore } from '../store/mapStore'
 import { useUIStore } from '../store/uiStore'
 import { useVehiclesStore } from '../features/vehicles/vehiclesStore'
-
+import { getAnimatedPosition, setFollowCallback, setFollowKey } from '../features/vehicles/useVehicleLayers'
 
 const DEFAULT_CENTER: [number, number] = [-77.03, -12.06]
 const DEFAULT_ZOOM = 10
@@ -321,51 +321,103 @@ class FitFleetControl implements maplibregl.IControl {
 }
 
 // ── Follow vehicle hook ───────────────────────────────────────────────────────
-// Sin animaciones — la cámara sigue la posición cruda del store directamente.
 function useFollowVehicle(map: maplibregl.Map | null) {
   const followMode        = useVehiclesStore(s => s.followMode)
   const selectedDeviceId  = useVehiclesStore(s => s.selectedDeviceId)
   const followTrackerName = useVehiclesStore(s => s.followTrackerName)
   const devices           = useVehiclesStore(s => s.devices)
 
-  // ── Encuadre inicial al activar follow o cambiar vehículo ─────────────────
+  // ── Registrar callback de follow en el módulo de capas ────────────────────
+  // El RAF tick de useVehicleLayers llama este callback frame a frame con la
+  // posición animada exacta. jumpTo es instantáneo — el suavizado lo hace el
+  // interpolador, no el mapa. Cámara y marcador se mueven en sincronía.
+  useEffect(() => {
+    if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) {
+      setFollowKey(null)
+      setFollowCallback(null)
+      return
+    }
+
+    const key = `${followTrackerName}/${selectedDeviceId}`
+    setFollowKey(key)
+
+    if (followMode === 'overview') {
+      setFollowCallback((lat, lng, _heading) => {
+        map.jumpTo({ center: [lng, lat] })
+      })
+    } else {
+      // navigation / sky
+      setFollowCallback((lat, lng, heading) => {
+        map.jumpTo({ center: [lng, lat], bearing: heading })
+      })
+    }
+
+    return () => {
+      setFollowKey(null)
+      setFollowCallback(null)
+    }
+  }, [map, followMode, selectedDeviceId, followTrackerName])
+
+  // ── Encuadre inicial al activar follow ────────────────────────────────────
+  // Solo al montar/cambiar modo: posiciona zoom, pitch y offset con easeTo.
+  // El seguimiento continuo lo hace el RAF callback.
   useEffect(() => {
     if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
+
     const device = devices.find(
       d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
     )
     if (!device) return
+
+    const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
+    const lat      = animated?.lat ?? device.lat
+    const lng      = animated?.lng ?? device.lng
+    const heading  = animated?.heading ?? device.heading ?? 0
+
     if (followMode === 'overview') {
-      map.easeTo({ center: [device.lng, device.lat], zoom: 15, bearing: 0, pitch: 0, duration: 600 })
+      map.easeTo({ center: [lng, lat], zoom: 15, bearing: 0, pitch: 0, duration: 600 })
     } else if (followMode === 'navigation') {
       map.easeTo({
-        center: [device.lng, device.lat], zoom: 18,
-        bearing: device.heading ?? 0, pitch: 60,
+        center: [lng, lat], zoom: 18,
+        bearing: heading, pitch: 60,
         duration: 600, offset: [0, 80],
       })
     }
+  // Solo re-corre al cambiar de modo o dispositivo — no en cada update de devices.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, followMode, selectedDeviceId, followTrackerName])
 
-  // ── Seguimiento continuo — reacciona a cada update del store ──────────────
+  // ── Reposicionar cámara al recuperar visibilidad de la pestaña ────────────
+  // Cuando el tab vuelve al foco, el RAF había estado pausado y la cámara quedó
+  // en la última posición conocida antes de perder foco. Reposicionamos
+  // instantáneamente a la posición actual del dispositivo seguido.
   useEffect(() => {
-    if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
-    const device = devices.find(
-      d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
-    )
-    if (!device) return
-    if (followMode === 'overview') {
-      map.jumpTo({ center: [device.lng, device.lat] })
-    } else if (followMode === 'navigation') {
-      map.jumpTo({ center: [device.lng, device.lat], bearing: device.heading ?? 0 })
-    }
-  }, [map, followMode, selectedDeviceId, followTrackerName, devices])
+    if (!map) return
 
-  // ── Resetear pitch y bearing al salir de follow ───────────────────────────
-  useEffect(() => {
-    if (!map || followMode !== 'none') return
-    map.easeTo({ pitch: 0, bearing: 0, duration: 400 })
-  }, [map, followMode])
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return
+      if (followMode === 'none' || !selectedDeviceId || !followTrackerName) return
+
+      const device = useVehiclesStore.getState().devices.find(
+        d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
+      )
+      if (!device) return
+
+      const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
+      const lat      = animated?.lat ?? device.lat
+      const lng      = animated?.lng ?? device.lng
+      const heading  = animated?.heading ?? device.heading ?? 0
+
+      if (followMode === 'overview') {
+        map.jumpTo({ center: [lng, lat] })
+      } else {
+        map.jumpTo({ center: [lng, lat], bearing: heading })
+      }
+    }
+
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [map, followMode, selectedDeviceId, followTrackerName])
 }
 
 // ── useMap ───────────────────────────────────────────────────────────────────
@@ -379,45 +431,25 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
-
-    const container = containerRef.current
-
-    // Esperar a que el contenedor tenga dimensiones reales antes de inicializar
-    // el mapa. Ant Design Layout tarda varios frames en estabilizar el layout,
-    // lo que causa el efecto de mapa estirado que luego se corrige.
-    const init = () => {
-      if (mapRef.current) return
-      const { width, height } = container.getBoundingClientRect()
-      if (width === 0 || height === 0) return  // aún no tiene dimensiones
-
-      const { mapStyle, trafficEnabled } = useUIStore.getState()
-      const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
-      const newMap = new maplibregl.Map({
-        container,
-        style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
-        attributionControl: {},
-      })
-      ;(newMap as any).__styleUrl = styleUrl
-      newMap.addControl(new ArmadilloNavControl(), 'top-right')
-      newMap.addControl(new FitFleetControl(), 'top-right')
-      newMap.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
-      newMap.addControl(new MapTypeControl(), 'bottom-right')
-      mapRef.current = newMap
-      setMap(newMap)
-      newMap.on('load', () => { newMap.resize(); setReady(true) })
-      ro.disconnect()
-    }
-
-    // ResizeObserver detecta cuando el contenedor tiene dimensiones reales
-    const ro = new ResizeObserver(init)
-    ro.observe(container)
-    init()  // intentar inmediato por si ya tiene dimensiones
-
+    const { mapStyle, trafficEnabled } = useUIStore.getState()
+    const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
+    const newMap = new maplibregl.Map({
+      container: containerRef.current,
+      style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
+      attributionControl: {},
+    })
+    ;(newMap as any).__styleUrl = styleUrl
+    newMap.addControl(new ArmadilloNavControl(), 'top-right')
+    newMap.addControl(new FitFleetControl(), 'top-right')
+    newMap.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
+    newMap.addControl(new MapTypeControl(), 'bottom-right')
+    mapRef.current = newMap
+    setMap(newMap)
+    newMap.on('load', () => setReady(true))
     return () => {
-      ro.disconnect()
       setReady(false)
       useMapStore.getState().clearMap()
-      mapRef.current?.remove()
+      newMap.remove()
       mapRef.current = null
     }
   }, [containerRef, setMap, setReady])
