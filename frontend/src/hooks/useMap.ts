@@ -379,25 +379,45 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
-    const { mapStyle, trafficEnabled } = useUIStore.getState()
-    const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
-    const newMap = new maplibregl.Map({
-      container: containerRef.current,
-      style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
-      attributionControl: {},
-    })
-    ;(newMap as any).__styleUrl = styleUrl
-    newMap.addControl(new ArmadilloNavControl(), 'top-right')
-    newMap.addControl(new FitFleetControl(), 'top-right')
-    newMap.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
-    newMap.addControl(new MapTypeControl(), 'bottom-right')
-    mapRef.current = newMap
-    setMap(newMap)
-    newMap.on('load', () => { newMap.resize(); setReady(true) })
+
+    const container = containerRef.current
+
+    // Esperar a que el contenedor tenga dimensiones reales antes de inicializar
+    // el mapa. Ant Design Layout tarda varios frames en estabilizar el layout,
+    // lo que causa el efecto de mapa estirado que luego se corrige.
+    const init = () => {
+      if (mapRef.current) return
+      const { width, height } = container.getBoundingClientRect()
+      if (width === 0 || height === 0) return  // aún no tiene dimensiones
+
+      const { mapStyle, trafficEnabled } = useUIStore.getState()
+      const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
+      const newMap = new maplibregl.Map({
+        container,
+        style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
+        attributionControl: {},
+      })
+      ;(newMap as any).__styleUrl = styleUrl
+      newMap.addControl(new ArmadilloNavControl(), 'top-right')
+      newMap.addControl(new FitFleetControl(), 'top-right')
+      newMap.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left')
+      newMap.addControl(new MapTypeControl(), 'bottom-right')
+      mapRef.current = newMap
+      setMap(newMap)
+      newMap.on('load', () => { newMap.resize(); setReady(true) })
+      ro.disconnect()
+    }
+
+    // ResizeObserver detecta cuando el contenedor tiene dimensiones reales
+    const ro = new ResizeObserver(init)
+    ro.observe(container)
+    init()  // intentar inmediato por si ya tiene dimensiones
+
     return () => {
+      ro.disconnect()
       setReady(false)
       useMapStore.getState().clearMap()
-      newMap.remove()
+      mapRef.current?.remove()
       mapRef.current = null
     }
   }, [containerRef, setMap, setReady])
