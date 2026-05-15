@@ -5,7 +5,7 @@ import { buildStyleUrl } from '../components/map/mapHelpers'
 import { useMapStore } from '../store/mapStore'
 import { useUIStore } from '../store/uiStore'
 import { useVehiclesStore } from '../features/vehicles/vehiclesStore'
-import { getAnimatedPosition, setFollowCallback, setFollowKey } from '../features/vehicles/useVehicleLayers'
+
 
 const DEFAULT_CENTER: [number, number] = [-77.03, -12.06]
 const DEFAULT_ZOOM = 10
@@ -321,103 +321,51 @@ class FitFleetControl implements maplibregl.IControl {
 }
 
 // ── Follow vehicle hook ───────────────────────────────────────────────────────
+// Sin animaciones — la cámara sigue la posición cruda del store directamente.
 function useFollowVehicle(map: maplibregl.Map | null) {
   const followMode        = useVehiclesStore(s => s.followMode)
   const selectedDeviceId  = useVehiclesStore(s => s.selectedDeviceId)
   const followTrackerName = useVehiclesStore(s => s.followTrackerName)
   const devices           = useVehiclesStore(s => s.devices)
 
-  // ── Registrar callback de follow en el módulo de capas ────────────────────
-  // El RAF tick de useVehicleLayers llama este callback frame a frame con la
-  // posición animada exacta. jumpTo es instantáneo — el suavizado lo hace el
-  // interpolador, no el mapa. Cámara y marcador se mueven en sincronía.
-  useEffect(() => {
-    if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) {
-      setFollowKey(null)
-      setFollowCallback(null)
-      return
-    }
-
-    const key = `${followTrackerName}/${selectedDeviceId}`
-    setFollowKey(key)
-
-    if (followMode === 'overview') {
-      setFollowCallback((lat, lng, _heading) => {
-        map.jumpTo({ center: [lng, lat] })
-      })
-    } else {
-      // navigation / sky
-      setFollowCallback((lat, lng, heading) => {
-        map.jumpTo({ center: [lng, lat], bearing: heading })
-      })
-    }
-
-    return () => {
-      setFollowKey(null)
-      setFollowCallback(null)
-    }
-  }, [map, followMode, selectedDeviceId, followTrackerName])
-
-  // ── Encuadre inicial al activar follow ────────────────────────────────────
-  // Solo al montar/cambiar modo: posiciona zoom, pitch y offset con easeTo.
-  // El seguimiento continuo lo hace el RAF callback.
+  // ── Encuadre inicial al activar follow o cambiar vehículo ─────────────────
   useEffect(() => {
     if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
-
     const device = devices.find(
       d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
     )
     if (!device) return
-
-    const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
-    const lat      = animated?.lat ?? device.lat
-    const lng      = animated?.lng ?? device.lng
-    const heading  = animated?.heading ?? device.heading ?? 0
-
     if (followMode === 'overview') {
-      map.easeTo({ center: [lng, lat], zoom: 15, bearing: 0, pitch: 0, duration: 600 })
+      map.easeTo({ center: [device.lng, device.lat], zoom: 15, bearing: 0, pitch: 0, duration: 600 })
     } else if (followMode === 'navigation') {
       map.easeTo({
-        center: [lng, lat], zoom: 18,
-        bearing: heading, pitch: 60,
+        center: [device.lng, device.lat], zoom: 18,
+        bearing: device.heading ?? 0, pitch: 60,
         duration: 600, offset: [0, 80],
       })
     }
-  // Solo re-corre al cambiar de modo o dispositivo — no en cada update de devices.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [map, followMode, selectedDeviceId, followTrackerName])
 
-  // ── Reposicionar cámara al recuperar visibilidad de la pestaña ────────────
-  // Cuando el tab vuelve al foco, el RAF había estado pausado y la cámara quedó
-  // en la última posición conocida antes de perder foco. Reposicionamos
-  // instantáneamente a la posición actual del dispositivo seguido.
+  // ── Seguimiento continuo — reacciona a cada update del store ──────────────
   useEffect(() => {
-    if (!map) return
-
-    const onVisible = () => {
-      if (document.visibilityState !== 'visible') return
-      if (followMode === 'none' || !selectedDeviceId || !followTrackerName) return
-
-      const device = useVehiclesStore.getState().devices.find(
-        d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
-      )
-      if (!device) return
-
-      const animated = getAnimatedPosition(followTrackerName, selectedDeviceId)
-      const lat      = animated?.lat ?? device.lat
-      const lng      = animated?.lng ?? device.lng
-      const heading  = animated?.heading ?? device.heading ?? 0
-
-      if (followMode === 'overview') {
-        map.jumpTo({ center: [lng, lat] })
-      } else {
-        map.jumpTo({ center: [lng, lat], bearing: heading })
-      }
+    if (!map || followMode === 'none' || !selectedDeviceId || !followTrackerName) return
+    const device = devices.find(
+      d => d.deviceId === selectedDeviceId && d.trackerName === followTrackerName
+    )
+    if (!device) return
+    if (followMode === 'overview') {
+      map.jumpTo({ center: [device.lng, device.lat] })
+    } else if (followMode === 'navigation') {
+      map.jumpTo({ center: [device.lng, device.lat], bearing: device.heading ?? 0 })
     }
+  }, [map, followMode, selectedDeviceId, followTrackerName, devices])
 
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [map, followMode, selectedDeviceId, followTrackerName])
+  // ── Resetear pitch y bearing al salir de follow ───────────────────────────
+  useEffect(() => {
+    if (!map || followMode !== 'none') return
+    map.easeTo({ pitch: 0, bearing: 0, duration: 400 })
+  }, [map, followMode])
 }
 
 // ── useMap ───────────────────────────────────────────────────────────────────
@@ -433,16 +381,10 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
     if (!containerRef.current || mapRef.current) return
     const { mapStyle, trafficEnabled } = useUIStore.getState()
     const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
-    // Color de fondo mientras los tiles cargan — evita cuadros negros
-    containerRef.current.style.background = '#e8e0d8'
     const newMap = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
       attributionControl: {},
-      // fadeDuration:0 elimina el fade-in de tiles nuevos — los cuadros negros
-      // al desplazarse rápido o hacer zoom out aparecen porque MapLibre hace
-      // fade desde negro (300ms por defecto). Con 0 los tiles aparecen directo.
-      fadeDuration: 0,
     })
     ;(newMap as any).__styleUrl = styleUrl
     newMap.addControl(new ArmadilloNavControl(), 'top-right')
