@@ -20,7 +20,7 @@ import {
 import { useVehiclesStore } from '../vehiclesStore'
 import type { FollowMode } from '../vehiclesStore'
 import { useMapStore } from '../../../store/mapStore'
-import { getAnimatedPosition } from '../useVehicleLayers'
+
 import type { Device, DeviceGroup } from '../types'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -306,10 +306,9 @@ export default function VehiclePanel() {
       setFollow(null, null, 'none')
       return
     }
-    const animated    = getAnimatedPosition(trackerName, deviceId)
     const storeDevice = devices.find(d => d.deviceId === deviceId && d.trackerName === trackerName)
-    const lat = animated?.lat ?? storeDevice?.lat
-    const lng = animated?.lng ?? storeDevice?.lng
+    const lat = storeDevice?.lat
+    const lng = storeDevice?.lng
     setFollow(deviceId, trackerName, 'overview')
     if (lat != null && lng != null && map) {
       map.easeTo({ center: [lng, lat], zoom: 16, bearing: 0, pitch: 0, duration: 800 })
