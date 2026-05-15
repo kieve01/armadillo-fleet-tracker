@@ -395,14 +395,10 @@ export function useVehicleLayers() {
   }, [mapReady, fetchAll])
 
   // ── Reload layers tras cambio de estilo ───────────────────────────────────
-  // 'styledata' dispara en cada tile update individual, no solo en cambios de
-  // estilo completo. Filtramos con isStyleLoaded() para evitar recargas
-  // redundantes que degradan el rendimiento del mapa.
   useEffect(() => {
     if (!map || !mapReady) return
     const setup = () => {
       if ((map as any)._removed) return
-      if (!map.isStyleLoaded()) return   // ignorar eventos de tiles individuales
       loadArrowIcon(map).then(() => {
         addSourceAndLayers(map)
         ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(fcRef.current)
@@ -427,8 +423,6 @@ export function useVehicleLayers() {
   }, [map, phase, setPendingLocation])
 
   // ── Rebuild GeoJSON cuando cambian devices ────────────────────────────────
-  // Si hay un RAF activo, no llamamos setData aquí — el RAF ya lo hace en cada
-  // frame y una llamada extra en paralelo causaría double-flush innecesario.
   useEffect(() => {
     if (!map || !mapReady) return
     if ((map as any)._removed) return
@@ -437,8 +431,6 @@ export function useVehicleLayers() {
     )
     const fc = devicesToFC(visible, animPosRef.current)
     fcRef.current = fc
-    if (!globalRafRef.current) {
-      ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(fc)
-    }
+    ;(map.getSource(SOURCE_ID) as GeoJSONSource | undefined)?.setData(fc)
   }, [map, mapReady, devices, hiddenTrackers, hiddenDevices])
 }
