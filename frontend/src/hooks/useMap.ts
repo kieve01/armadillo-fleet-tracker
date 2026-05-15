@@ -433,10 +433,16 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
     if (!containerRef.current || mapRef.current) return
     const { mapStyle, trafficEnabled } = useUIStore.getState()
     const styleUrl = buildStyleUrl(REGION, mapStyle, API_KEY, trafficEnabled)
+    // Color de fondo mientras los tiles cargan — evita cuadros negros
+    containerRef.current.style.background = '#e8e0d8'
     const newMap = new maplibregl.Map({
       container: containerRef.current,
       style: styleUrl, center: DEFAULT_CENTER, zoom: DEFAULT_ZOOM, minZoom: 5,
       attributionControl: {},
+      // fadeDuration:0 elimina el fade-in de tiles nuevos — los cuadros negros
+      // al desplazarse rápido o hacer zoom out aparecen porque MapLibre hace
+      // fade desde negro (300ms por defecto). Con 0 los tiles aparecen directo.
+      fadeDuration: 0,
     })
     ;(newMap as any).__styleUrl = styleUrl
     newMap.addControl(new ArmadilloNavControl(), 'top-right')
