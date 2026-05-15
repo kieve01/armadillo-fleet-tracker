@@ -393,7 +393,7 @@ export function useMap(containerRef: React.RefObject<HTMLDivElement | null>) {
     newMap.addControl(new MapTypeControl(), 'bottom-right')
     mapRef.current = newMap
     setMap(newMap)
-    newMap.on('load', () => setReady(true))
+    newMap.on('load', () => { newMap.resize(); setReady(true) })
     return () => {
       setReady(false)
       useMapStore.getState().clearMap()
